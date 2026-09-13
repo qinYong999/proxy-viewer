@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>节点测试记录</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f6fa; color: #2d3436; padding: 20px;
+            display: flex; flex-direction: column;
+        }
+        .container { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; height: 100%; min-height: 0; }
+
+        .header {
+            background: linear-gradient(135deg, #6c5ce7, #a29bfe);
+            color: #fff; padding: 18px 24px; border-radius: 12px; margin-bottom: 14px;
+        }
+        .header h1 { font-size: 22px; margin-bottom: 6px; }
+        .header .subtitle { font-size: 13px; opacity: 0.9; }
+        .header .stats { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
+        .header .stat-item { background: rgba(255,255,255,0.15); padding: 5px 12px; border-radius: 8px; font-size: 13px; }
+        .header .stat-item span { font-weight: 700; font-size: 14px; }
+
+        .msg-banner { background: #d4edda; color: #155724; padding: 10px 20px; border-radius: 8px; margin-bottom: 10px; font-size: 14px; border: 1px solid #c3e6cb; }
+        .error-banner { background: #ffeaa7; color: #d63031; padding: 10px 20px; border-radius: 8px; margin-bottom: 10px; font-size: 14px; border: 1px solid #fdcb6e; }
+
+        .nav-bar {
+            background: #fff; padding: 10px 16px; border-radius: 8px;
+            margin-bottom: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+        }
+        .nav-bar a { color: #6c5ce7; text-decoration: none; font-size: 13px; padding: 5px 12px; border-radius: 6px; transition: background 0.15s; }
+        .nav-bar a:hover { background: #f0edff; }
+        .nav-bar .active { background: #6c5ce7; color: #fff; }
+        .nav-bar .btn-test {
+            background: #e17055; color: #fff; border: none; padding: 5px 16px;
+            border-radius: 6px; font-size: 13px; cursor: pointer; text-decoration: none; transition: background 0.2s;
+        }
+        .nav-bar .btn-test:hover { background: #d63031; }
+        .nav-bar .btn-test:disabled { background: #b2bec3; cursor: not-allowed; }
+        .nav-bar .spacer { flex: 1; }
+
+        .table-wrapper { background: #fff; border-radius: 12px; box-shadow: 0 2px 12px rgba(0,0,0,0.06); overflow: auto; flex: 1; min-height: 0; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        thead { background: #f8f9fd; }
+        th { padding: 10px 12px; text-align: left; font-weight: 600; color: #636e72; border-bottom: 2px solid #dfe6e9; white-space: nowrap; position: sticky; top: 0; background: #f8f9fd; z-index: 1; }
+        td { padding: 8px 12px; border-bottom: 1px solid #f1f2f6; }
+        tr:hover td { background: #f8f9fd; }
+
+        .badge {
+            display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 700;
+        }
+        .badge-schedule { background: #dfe6e9; color: #2d3436; }
+        .badge-manual   { background: #e17055; color: #fff; }
+        .time { font-family: "SF Mono", monospace; font-size: 12px; color: #636e72; white-space: nowrap; }
+
+        .pagination { display: flex; justify-content: center; align-items: center; gap: 5px; padding: 14px 0 12px; flex-wrap: wrap; }
+        .pagination a, .pagination span { padding: 5px 12px; border-radius: 6px; font-size: 13px; text-decoration: none; }
+        .pagination a { background: #fff; color: #6c5ce7; border: 1px solid #dfe6e9; transition: all 0.15s; }
+        .pagination a:hover { background: #f0edff; border-color: #6c5ce7; }
+        .pagination .active { background: #6c5ce7; color: #fff; border-color: #6c5ce7; }
+        .pagination .disabled { color: #b2bec3; cursor: default; pointer-events: none; }
+        .pagination .info { color: #636e72; font-size: 13px; padding: 5px 8px; }
+
+        .empty-state { text-align: center; padding: 60px 20px; color: #636e72; }
+        .empty-state .big-icon { font-size: 48px; margin-bottom: 16px; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>🔍 节点连通性测试</h1>
+        <div class="subtitle">
+            TLS+HTTP 连通性测试，定时自动执行。测试失败只标记、不删除节点<span
+                th:if="${autoDeleteAfterFailures > 0}"
+                th:text="'，仅在连续失败 ' + ${autoDeleteAfterFailures} + ' 次后自动删除'">，仅在连续失败 N 次后自动删除</span>。
+        </div>
+    </div>
+
+    <div class="msg-banner" th:if="${msg != null}" th:text="${msg}">消息</div>
+    <div class="error-banner" th:if="${error != null}" th:text="${error}">错误</div>
+
+    <div class="nav-bar">
+        <a href="/">← 节点列表</a>
+        <a href="/logs">📋 操作日志</a>
+        <span class="spacer"></span>
+        <form method="post" action="/test" style="display:inline; margin:0;">
+            <button type="submit" class="btn-test" th:disabled="${testRunning}"
+                    th:text="${testRunning} ? '⏳ 测试进行中…' : '🚀 手动测试'">🚀 手动测试</button>
+        </form>
+    </div>
+
+    <div class="table-wrapper">
+        <table th:if="${totalCount > 0}">
+            <thead>
+            <tr>
+                <th style="width:60px;">#</th>
+                <th style="width:90px;">测试时间</th>
+                <th style="width:80px;">触发方式</th>
+                <th style="width:60px;">总计</th>
+                <th style="width:60px;">✅ 可达</th>
+                <th style="width:60px;">❌ 失败</th>
+                <th style="width:70px;">🗑 自动删除</th>
+                <th style="width:90px;">耗时</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="t, stat : ${tests}">
+                <td th:text="${(currentPage - 1) * 50 + stat.count}">1</td>
+                <td class="time"><span th:text="${#temporals.format(t.testTime, 'MM-dd HH:mm:ss')}">01-01 00:00</span></td>
+                <td>
+                    <span th:if="${t.triggerType == 'SCHEDULED'}" class="badge badge-schedule">⏰ 定时</span>
+                    <span th:if="${t.triggerType == 'MANUAL'}" class="badge badge-manual">👤 手动</span>
+                </td>
+                <td th:text="${t.totalNodes}">0</td>
+                <td style="color:#00b894; font-weight:700;" th:text="${t.successCount}">0</td>
+                <td style="color:#d63031;" th:text="${t.failedCount}">0</td>
+                <td style="color:#636e72;" th:text="${t.deletedCount}">0</td>
+                <td class="time" th:text="${t.durationMs + ' ms'}">0ms</td>
+            </tr>
+            </tbody>
+        </table>
+        <div class="empty-state" th:if="${totalCount == 0}">
+            <div class="big-icon">🔍</div>
+            <p>暂无测试记录</p>
+            <p style="font-size:13px; margin-top:8px; color:#b2bec3;">
+                点击「🚀 手动测试」开始首次测试，或等待定时任务自动执行
+            </p>
+        </div>
+    </div>
+
+    <div class="pagination" th:if="${totalPages > 1}">
+        <a th:href="@{/test-logs(page=1)}" th:classappend="${currentPage == 1} ? 'disabled' : ''">«</a>
+        <a th:href="@{/test-logs(page=${currentPage - 1})}" th:classappend="${currentPage == 1} ? 'disabled' : ''">‹</a>
+        <th:block th:each="i : ${#numbers.sequence(1, totalPages)}">
+            <a th:if="${i >= currentPage - 2 and i <= currentPage + 2}" th:href="@{/test-logs(page=${i})}"
+               th:classappend="${i == currentPage} ? 'active' : ''" th:text="${i}">1</a>
+        </th:block>
+        <a th:href="@{/test-logs(page=${currentPage + 1})}" th:classappend="${currentPage == totalPages} ? 'disabled' : ''">›</a>
+        <a th:href="@{/test-logs(page=${totalPages})}" th:classappend="${currentPage == totalPages} ? 'disabled' : ''">»</a>
+        <span class="info"><span th:text="${currentPage}">1</span>/<span th:text="${totalPages}">1</span>页 · <span th:text="${totalCount}">0</span>条</span>
+    </div>
+</div>
+</body>
+</html>

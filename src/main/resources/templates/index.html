@@ -1,0 +1,731 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>代理订阅节点信息</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f6fa;
+            color: #2d3436;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+        }
+        .container {
+            max-width: 98vw; margin: 0 auto;
+            display: flex; flex-direction: column;
+            height: 100%; min-height: 0;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #6c5ce7, #a29bfe);
+            color: #fff; padding: 18px 24px; border-radius: 12px; margin-bottom: 14px;
+        }
+        .header h1 { font-size: 22px; margin-bottom: 6px; }
+        .header .subtitle { font-size: 13px; opacity: 0.9; word-break: break-all; }
+        .header .stats { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
+        .header .stat-item {
+            background: rgba(255,255,255,0.15); padding: 5px 12px;
+            border-radius: 8px; font-size: 13px;
+        }
+        .header .stat-item span { font-weight: 700; font-size: 14px; }
+
+        .msg-banner {
+            background: #d4edda; color: #155724; padding: 10px 20px;
+            border-radius: 8px; margin-bottom: 10px; font-size: 14px;
+            border: 1px solid #c3e6cb;
+        }
+        .error-banner {
+            background: #ffeaa7; color: #d63031; padding: 10px 20px;
+            border-radius: 8px; margin-bottom: 10px; font-size: 14px;
+            border: 1px solid #fdcb6e;
+        }
+
+        /* Toolbar */
+        .toolbar {
+            background: #fff; padding: 10px 16px; border-radius: 8px;
+            margin-bottom: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+        }
+        .toolbar label { font-size: 13px; font-weight: 600; color: #636e72; white-space: nowrap; }
+        .toolbar input[type="text"] {
+            flex: 1; min-width: 180px; padding: 6px 10px;
+            border: 1px solid #dfe6e9; border-radius: 6px; font-size: 13px;
+            outline: none;
+        }
+        .toolbar input[type="text"]:focus { border-color: #6c5ce7; }
+        .toolbar select, .toolbar .styled-select {
+            padding: 6px 10px; border: 1px solid #dfe6e9; border-radius: 6px;
+            font-size: 13px; outline: none; background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23636e72' d='M6 8L1 3h10z'/%3E%3C/svg%3E") no-repeat right 8px center;
+            cursor: pointer; appearance: none; -webkit-appearance: none; -moz-appearance: none;
+            padding-right: 28px; min-width: 100px;
+            transition: border-color 0.2s;
+        }
+        .toolbar select:focus, .toolbar .styled-select:focus { border-color: #6c5ce7; }
+        .toolbar select:hover, .toolbar .styled-select:hover { border-color: #a29bfe; }
+        .toolbar button, .toolbar .btn {
+            background: #6c5ce7; color: #fff; border: none; text-decoration: none;
+            padding: 6px 16px; border-radius: 6px; font-size: 13px;
+            cursor: pointer; transition: background 0.2s;
+        }
+        .toolbar button:hover { background: #5b4cdb; }
+
+        .toolbar .btn-copy {
+            background: #00b894; display: inline-flex; align-items: center; gap: 5px;
+        }
+        .toolbar .btn-copy:hover { background: #00a381; }
+        .toolbar .btn-copy:disabled {
+            background: #b2bec3; cursor: not-allowed;
+        }
+        .toolbar .btn-delete {
+            background: #d63031; display: inline-flex; align-items: center; gap: 5px;
+        }
+        .toolbar .btn-delete:hover { background: #b71c1c; }
+        .toolbar .btn-delete:disabled {
+            background: #b2bec3; cursor: not-allowed;
+        }
+        th.sortable { cursor: pointer; user-select: none; }
+        th.sortable:hover { background: #eef0ff; }
+        .sort-arrow { font-size: 11px; margin-left: 2px; color: #6c5ce7; }
+        .toolbar .btn-outline {
+            background: transparent; color: #6c5ce7; border: 1px solid #6c5ce7;
+            padding: 5px 14px; border-radius: 6px; font-size: 13px;
+            text-decoration: none; transition: all 0.2s;
+        }
+        .toolbar .btn-outline:hover { background: #f0edff; }
+
+        /* Selection bar (always visible, no bounce) */
+        .sel-bar {
+            background: #fff; padding: 8px 16px; border-radius: 8px;
+            margin-bottom: 8px; display: flex; align-items: center; gap: 12px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.06); font-size: 13px;
+            min-height: 38px;
+        }
+        .sel-bar .count { color: #6c5ce7; font-weight: 700; }
+        .sel-bar .hint { color: #b2bec3; font-size: 12px; }
+        .sel-bar .clear-btn {
+            background: transparent; color: #d63031; border: 1px solid #d63031;
+            padding: 3px 10px; border-radius: 4px; font-size: 12px; cursor: pointer;
+            transition: all 0.15s; display: none;
+        }
+        .sel-bar .clear-btn.show { display: inline-block; }
+        .sel-bar .clear-btn:hover { background: #fff0f0; }
+
+        /* Table —— 撑满剩余空间，仅内部滚动 */
+        .table-wrapper {
+            background: #fff; border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+            overflow: auto;
+            flex: 1; min-height: 0;
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+        thead { background: #f8f9fd; }
+        th {
+            padding: 10px 6px; text-align: left; font-weight: 600;
+            color: #636e72; border-bottom: 2px solid #dfe6e9;
+            white-space: nowrap; position: relative; user-select: none;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        th .resize-handle {
+            position: absolute; top: 0; right: 0; width: 5px; height: 100%;
+            cursor: col-resize; background: transparent; z-index: 2;
+        }
+        th .resize-handle:hover, th .resize-handle.resizing { background: #6c5ce7; opacity: 0.5; }
+        td {
+            padding: 7px 6px; border-bottom: 1px solid #f1f2f6;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        tr:hover td { background: #f8f9fd; }
+        tr.selected td { background: #eef0ff; }
+
+        td.cb-cell, th.cb-cell { width: 36px; text-align: center; padding: 0; }
+        td.cb-cell input, th.cb-cell input { width: 16px; height: 16px; cursor: pointer; }
+
+        .badge {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 11px; font-weight: 700;
+        }
+        .badge-vless { background: #dfe6e9; color: #2d3436; }
+        .badge-vmess { background: #6c5ce7; color: #fff; }
+        .badge-tls  { background: #00b894; color: #fff; }
+        .badge-ws   { background: #0984e3; color: #fff; }
+        .badge-tcp  { background: #fdcb6e; color: #2d3436; }
+        .mono { font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace; font-size: 12px; }
+
+        /* Pagination */
+        .pagination {
+            display: flex; justify-content: center; align-items: center;
+            gap: 5px; padding: 14px 0 12px; flex-wrap: wrap;
+        }
+        .pagination a, .pagination span {
+            padding: 5px 12px; border-radius: 6px;
+            font-size: 13px; text-decoration: none;
+        }
+        .pagination a {
+            background: #fff; color: #6c5ce7; border: 1px solid #dfe6e9;
+            transition: all 0.15s;
+        }
+        .pagination a:hover { background: #f0edff; border-color: #6c5ce7; }
+        .pagination .active { background: #6c5ce7; color: #fff; border-color: #6c5ce7; }
+        .pagination .disabled { color: #b2bec3; cursor: default; pointer-events: none; }
+        .pagination .info { color: #636e72; font-size: 13px; padding: 5px 8px; }
+        .pagination input.page-jump {
+            width: 44px; padding: 4px 6px; border: 1px solid #dfe6e9;
+            border-radius: 4px; text-align: center; font-size: 13px; outline: none;
+        }
+        .pagination input.page-jump:focus { border-color: #6c5ce7; }
+
+        .empty-state { text-align: center; padding: 60px 20px; color: #636e72; }
+        .empty-state .big-icon { font-size: 48px; margin-bottom: 16px; }
+
+        /* Toast */
+        .toast {
+            position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+            background: #2d3436; color: #fff; padding: 12px 28px; border-radius: 8px;
+            font-size: 14px; opacity: 0; transition: opacity 0.3s;
+            z-index: 999; pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+
+        @media (max-width: 768px) {
+            body { padding: 10px; }
+            .header { padding: 12px 16px; }
+            .header h1 { font-size: 18px; }
+            .toolbar input[type="text"] { min-width: 120px; }
+            th, td { padding: 6px 4px; font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+
+    <!-- Header -->
+    <div class="header">
+        <h1>🌐 代理订阅节点信息</h1>
+        <div class="subtitle">订阅链接：<span th:text="${currentUrl}">...</span></div>
+        <div class="stats">
+            <div class="stat-item">📡 总数 <span th:text="${totalCount}">0</span></div>
+            <div class="stat-item">🔷 VLESS <span th:text="${vlessCount}">0</span></div>
+            <div class="stat-item">🔶 VMESS <span th:text="${vmessCount}">0</span></div>
+            <div class="stat-item">🔗 WS <span th:text="${wsCount}">0</span></div>
+            <div class="stat-item">🔗 TCP <span th:text="${tcpCount}">0</span></div>
+            <div class="stat-item">✅ 可达 <span th:text="${okCount}">0</span></div>
+            <div class="stat-item">❌ 失败 <span th:text="${failedCount}">0</span></div>
+        </div>
+    </div>
+
+    <!-- 消息/错误 -->
+    <div class="msg-banner" th:if="${msg != null}" th:text="${msg}">消息</div>
+    <div class="error-banner" th:if="${error != null}" th:text="${error}">错误</div>
+
+    <!-- 工具栏 -->
+    <div class="toolbar">
+        <label for="subUrl">🔗 链接：</label>
+        <input type="text" id="subUrl"
+               th:value="${currentUrl}"
+               placeholder="订阅链接...">
+        <button onclick="refreshUrl()">🔄 更新节点</button>
+        <button onclick="location.reload()" class="btn-outline" style="border:1px solid #dfe6e9; padding:5px 14px;">⟳ 刷新页面</button>
+
+        <span style="color:#b2bec3;">|</span>
+
+        <label for="pageSizeSelect">每页</label>
+        <select id="pageSizeSelect" onchange="changePageSize()">
+            <option th:each="s : ${pageSizes}" th:value="${s}" th:text="${s}"
+                    th:selected="${s == pageSize}">50</option>
+        </select>
+        <span style="color:#636e72; font-size:13px;">条</span>
+
+        <span style="color:#b2bec3;">|</span>
+
+        <label for="countryFilter">🌍 国家</label>
+        <select id="countryFilter" class="styled-select" onchange="filterByCountry()">
+            <option value="">全部</option>
+            <option th:each="c : ${countries}" th:value="${c}" th:text="${c}"
+                    th:selected="${c == currentCountry}">
+            </option>
+        </select>
+        <a th:href="@{/(page=1,size=${pageSize},url=${currentUrl})}"
+           th:unless="${#strings.isEmpty(currentCountry)}"
+           class="btn-outline" style="font-size:12px; padding:4px 10px;">✕ 清除</a>
+
+        <a href="/logs" class="btn-outline" style="font-size:12px; padding:4px 10px;">📋 日志</a>
+        <a href="/test-logs" class="btn-outline" style="font-size:12px; padding:4px 10px;">🔍 测速</a>
+
+        <span style="flex:1;"></span>
+
+        <button id="copyBtn" class="btn-copy" onclick="copySelected()" disabled>
+            📋 复制选中 (<span id="selCount">0</span>)
+        </button>
+        <button id="deleteBtn" class="btn-delete" onclick="deleteSelected()" disabled>
+            🗑 删除选中
+        </button>
+        <button id="purgeBtn" class="btn-delete" onclick="purgeFailed()" th:if="${failedCount > 0}"
+                title="删除所有被标记为失败的节点">
+            🧹 清理失败节点 (<span th:text="${failedCount}">0</span>)
+        </button>
+        <input type="hidden" id="sortField" th:value="${currentSort}">
+        <input type="hidden" id="sortOrder" th:value="${currentOrder}">
+
+        <!-- 刷新订阅是状态变更操作，改为 POST 表单提交 -->
+        <form id="refreshForm" method="post" action="/refresh" style="display:none;">
+            <input type="hidden" name="url" id="refreshFormUrl">
+            <input type="hidden" name="size" id="refreshFormSize">
+        </form>
+    </div>
+
+    <!-- 选中状态栏（始终显示，消除弹跳） -->
+    <div class="sel-bar" id="selBar">
+        <span th:if="${totalCount > 0}">
+            ✅ 已选中 <span class="count" id="selBarCount">0</span> 个节点
+        </span>
+        <span class="hint" th:if="${totalCount == 0}">暂无节点数据</span>
+        <span style="flex:1;"></span>
+        <button class="clear-btn" id="clearSelBtn" onclick="clearAllSelections()">取消选择</button>
+    </div>
+
+    <!-- 表格 -->
+    <div class="table-wrapper">
+        <table id="nodeTable" th:if="${totalCount > 0}">
+            <thead>
+            <tr>
+                <th class="cb-cell">
+                    <input type="checkbox" id="selectAll" onchange="toggleSelectAll(this.checked)">
+                </th>
+                <th style="width:36px;">#<span class="resize-handle"></span></th>
+                <th style="width:60px;">国家<span class="resize-handle"></span></th>
+                <th>节点名称<span class="resize-handle"></span></th>
+                <th style="width:52px;">协议<span class="resize-handle"></span></th>
+                <th style="width:120px;">地址<span class="resize-handle"></span></th>
+                <th style="width:46px;">端口<span class="resize-handle"></span></th>
+                <th style="width:48px;">传输<span class="resize-handle"></span></th>
+                <th style="width:40px;">TLS<span class="resize-handle"></span></th>
+                <th>路径<span class="resize-handle"></span></th>
+                <th>SNI<span class="resize-handle"></span></th>
+                <th>Host<span class="resize-handle"></span></th>
+                <th style="width:70px;" class="sortable" onclick="toggleSort()">
+                    延迟<span class="sort-arrow" th:if="${currentSort == 'latencyMs'}" th:text="${currentOrder == 'asc' ? '▲' : '▼'}"></span>
+                    <span class="resize-handle"></span>
+                </th>
+                <th style="width:70px;">速度<span class="resize-handle"></span></th>
+                <th style="width:85px;">测试时间<span class="resize-handle"></span></th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="node, stat : ${nodes}" th:id="'row-' + ${node.id}"
+                onclick="toggleRow(this, event)" style="cursor:pointer;">
+                <td class="cb-cell" onclick="event.stopPropagation()">
+                    <input type="checkbox" class="node-cb" th:attr="data-id=${node.id}"
+                           onclick="onCheckboxClick()">
+                </td>
+                <td th:text="${(currentPage - 1) * pageSize + stat.count}">1</td>
+                <td>
+                    <span th:if="${node.countryName != null && !node.countryName.isEmpty()}"
+                          th:text="${node.countryName}">US</span>
+                    <span th:if="${node.countryName == null || node.countryName.isEmpty()}" style="color:#b2bec3;">—</span>
+                </td>
+                <td th:text="${node.name}" th:title="${node.name}">节点名</td>
+                <td>
+                    <span th:if="${node.protocol == 'vless'}" class="badge badge-vless">VL</span>
+                    <span th:if="${node.protocol == 'vmess'}" class="badge badge-vmess">VM</span>
+                </td>
+                <td class="mono" th:text="${node.server}" th:title="${node.server}">server</td>
+                <td th:text="${node.port}">443</td>
+                <td>
+                    <span th:if="${node.network == 'ws'}" class="badge badge-ws">WS</span>
+                    <span th:if="${node.network == 'tcp'}" class="badge badge-tcp">TCP</span>
+                    <span th:if="${node.network != 'ws' and node.network != 'tcp'}" th:text="${node.network}">—</span>
+                </td>
+                <td>
+                    <span th:if="${node.tls == 'tls'}" class="badge badge-tls">✓</span>
+                    <span th:if="${node.tls != 'tls'}" style="color:#b2bec3;">—</span>
+                </td>
+                <td class="mono" th:text="${node.path}" th:title="${node.path}">path</td>
+                <td class="mono" th:text="${node.sni}" th:title="${node.sni}">sni</td>
+                <td class="mono" th:text="${node.host}" th:title="${node.host}">host</td>
+                <td>
+                    <span th:if="${node.latencyMs != null && node.latencyMs >= 0 && node.latencyMs < 200}"
+                          style="color:#00b894;font-weight:600;" th:text="${node.latencyMs + ' ms'}">0ms</span>
+                    <span th:if="${node.latencyMs != null && node.latencyMs >= 200 && node.latencyMs < 500}"
+                          style="color:#fdcb6e;font-weight:600;" th:text="${node.latencyMs + ' ms'}">0ms</span>
+                    <span th:if="${node.latencyMs != null && node.latencyMs >= 500}"
+                          style="color:#d63031;font-weight:600;" th:text="${node.latencyMs + ' ms'}">0ms</span>
+                    <span th:if="${node.lastTestResult != null && node.lastTestResult.startsWith('FAILED:')}"
+                          th:title="${node.lastTestResult + ' （连续失败 ' + node.consecutiveFailures + ' 次）'}"
+                          style="color:#d63031;font-size:11px;cursor:help;"
+                          th:text="${#strings.replace(node.lastTestResult,'FAILED:','')}">ERR</span>
+                    <span th:if="${(node.latencyMs == null || node.latencyMs < 0) && (node.lastTestResult == null || !node.lastTestResult.startsWith('FAILED:'))}"
+                          style="color:#b2bec3;">—</span>
+                </td>
+                <td>
+                    <span th:if="${node.speedKbps != null && node.speedKbps >= 1000}"
+                          style="color:#00b894;font-weight:600;font-size:12px;"
+                          th:text="${#numbers.formatDecimal(node.speedKbps / 1000.0, 1, 1) + ' Mbps'}">1.5 Mbps</span>
+                    <span th:if="${node.speedKbps != null && node.speedKbps >= 100 && node.speedKbps < 1000}"
+                          style="color:#fdcb6e;font-weight:600;font-size:12px;"
+                          th:text="${node.speedKbps + ' Kbps'}">500 Kbps</span>
+                    <span th:if="${node.speedKbps != null && node.speedKbps > 0 && node.speedKbps < 100}"
+                          style="color:#d63031;font-weight:600;font-size:12px;"
+                          th:text="${node.speedKbps + ' Kbps'}">50 Kbps</span>
+                    <span th:if="${node.speedKbps != null && node.speedKbps == 0}"
+                          style="color:#b2bec3;font-size:11px;">0</span>
+                    <span th:if="${node.speedKbps == null || node.speedKbps < 0}"
+                          style="color:#b2bec3;font-size:11px;">
+                        <span th:if="${node.lastTestResult == 'OK'}">N/A</span>
+                        <span th:if="${node.lastTestResult != null && node.lastTestResult.startsWith('FAILED:')}">—</span>
+                    </span>
+                </td>
+                <td class="time">
+                    <span th:if="${node.lastTestTime != null}"
+                          th:text="${#temporals.format(node.lastTestTime, 'MM-dd HH:mm')}"
+                          style="font-size:12px;color:#636e72;font-family:monospace;">01-01 00:00</span>
+                    <span th:if="${node.lastTestTime == null}" style="color:#b2bec3;">—</span>
+                </td>
+            </tr>
+            </tbody>
+        </table>
+
+        <div class="empty-state" th:if="${totalCount == 0 and error == null and msg == null}">
+            <div class="big-icon">📭</div>
+            <p>暂无节点数据</p>
+            <p style="font-size:13px; margin-top:8px;" th:if="${#strings.isEmpty(currentUrl)}">
+                请先在顶部填写订阅链接（或用环境变量 <code>SUBSCRIPTION_URL</code> 配置），再点击「🔄 更新节点」
+            </p>
+            <p style="font-size:13px; margin-top:8px;" th:unless="${#strings.isEmpty(currentUrl)}">
+                <a href="javascript:refreshUrl()" style="color:#6c5ce7;">点击此处刷新</a>
+            </p>
+        </div>
+    </div>
+
+    <!-- 分页 -->
+    <div class="pagination" th:if="${totalPages > 1}">
+        <a th:href="@{/(page=1,size=${pageSize},url=${currentUrl},country=${currentCountry},sort=${currentSort},order=${currentOrder})}"
+           th:classappend="${currentPage == 1} ? 'disabled' : ''">«</a>
+        <a th:href="@{/(page=${currentPage - 1},size=${pageSize},url=${currentUrl},country=${currentCountry},sort=${currentSort},order=${currentOrder})}"
+           th:classappend="${currentPage == 1} ? 'disabled' : ''">‹</a>
+
+        <th:block th:each="i : ${#numbers.sequence(1, totalPages)}">
+            <a th:if="${i >= currentPage - 2 and i <= currentPage + 2}"
+               th:href="@{/(page=${i},size=${pageSize},url=${currentUrl},country=${currentCountry},sort=${currentSort},order=${currentOrder})}"
+               th:classappend="${i == currentPage} ? 'active' : ''"
+               th:text="${i}">1</a>
+        </th:block>
+
+        <a th:href="@{/(page=${currentPage + 1},size=${pageSize},url=${currentUrl},country=${currentCountry},sort=${currentSort},order=${currentOrder})}"
+           th:classappend="${currentPage == totalPages} ? 'disabled' : ''">›</a>
+        <a th:href="@{/(page=${totalPages},size=${pageSize},url=${currentUrl},country=${currentCountry},sort=${currentSort},order=${currentOrder})}"
+           th:classappend="${currentPage == totalPages} ? 'disabled' : ''">»</a>
+
+        <span class="info">
+            <span th:text="${currentPage}">1</span>/<span th:text="${totalPages}">1</span>页 ·
+            <span th:text="${totalCount}">0</span>条
+        </span>
+
+        <span class="info">
+             跳至 <input class="page-jump" type="number" id="pageJump" min="1"
+                        th:attr="max=${totalPages}"> 页
+            <a href="javascript:jumpPage()" style="padding:4px 8px;">GO</a>
+        </span>
+        <span class="info" th:if="${currentSort == 'latencyMs'}">
+            <span style="color:#6c5ce7;font-size:12px;">按延迟排序</span>
+        </span>
+    </div>
+
+    <div style="text-align:center; padding:10px 0 8px; font-size:12px; color:#b2bec3;">
+        Proxy Subscription Viewer
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+    // ========== 刷新 ==========
+    function refreshUrl() {
+        var url = document.getElementById('subUrl').value.trim();
+        if (!url) { showToast('请先填写订阅链接'); return; }
+        var size = document.getElementById('pageSizeSelect').value;
+        document.getElementById('refreshFormUrl').value = url;
+        document.getElementById('refreshFormSize').value = size;
+        showToast('正在刷新订阅，请稍候...');
+        document.getElementById('refreshForm').submit();
+    }
+    document.getElementById('subUrl').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') refreshUrl();
+    });
+
+    // ========== 切换分页大小 ==========
+    function changePageSize() {
+        var size = document.getElementById('pageSizeSelect').value;
+        var url = document.getElementById('subUrl').value.trim();
+        var country = document.getElementById('countryFilter').value;
+        var sort = document.getElementById('sortField') ? document.getElementById('sortField').value : '';
+        var order = document.getElementById('sortOrder') ? document.getElementById('sortOrder').value : 'asc';
+        var q = '?page=1&size=' + size;
+        if (country) q += '&country=' + encodeURIComponent(country);
+        if (url) q += '&url=' + encodeURIComponent(url);
+        if (sort) q += '&sort=' + sort + '&order=' + order;
+        window.location.href = '/' + q;
+    }
+
+    // ========== 跳页 ==========
+    function jumpPage() {
+        var input = document.getElementById('pageJump');
+        var page = parseInt(input.value);
+        if (isNaN(page) || page < 1) page = 1;
+        var max = parseInt(input.getAttribute('max'));
+        if (page > max) page = max;
+        var size = document.getElementById('pageSizeSelect').value;
+        var url = document.getElementById('subUrl').value.trim();
+        var country = document.getElementById('countryFilter').value;
+        var q = '?page=' + page + '&size=' + size;
+        if (country) q += '&country=' + encodeURIComponent(country);
+        if (url) q += '&url=' + encodeURIComponent(url);
+        if (document.getElementById('sortField')) {
+            var sort = document.getElementById('sortField').value;
+            if (sort) q += '&sort=' + sort + '&order=' + document.getElementById('sortOrder').value;
+        }
+        window.location.href = '/' + q;
+    }
+    document.getElementById('pageJump').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') jumpPage();
+    });
+
+    // ========== 列宽拖拽 ==========
+    (function() {
+        var table = document.getElementById('nodeTable');
+        if (!table) return;
+        var startX = 0, startWidth = 0, thEl = null, handleEl = null;
+        function onMouseDown(e) {
+            handleEl = e.target;
+            if (!handleEl.classList.contains('resize-handle')) return;
+            thEl = handleEl.parentElement;
+            startX = e.clientX;
+            startWidth = thEl.offsetWidth;
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = 'col-resize';
+            handleEl.classList.add('resizing');
+            e.preventDefault();
+        }
+        function onMouseMove(e) {
+            if (!thEl) return;
+            var diff = e.clientX - startX;
+            thEl.style.width = Math.max(30, startWidth + diff) + 'px';
+        }
+        function onMouseUp() {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+            document.body.style.cursor = '';
+            if (handleEl) handleEl.classList.remove('resizing');
+            thEl = null; handleEl = null;
+        }
+        table.addEventListener('mousedown', onMouseDown);
+    })();
+
+    // ========== 国家筛选 ==========
+    function filterByCountry() {
+        var country = document.getElementById('countryFilter').value;
+        var size = document.getElementById('pageSizeSelect').value;
+        var url = document.getElementById('subUrl').value.trim();
+        var q = '?page=1&size=' + size;
+        if (country) q += '&country=' + encodeURIComponent(country);
+        if (url) q += '&url=' + encodeURIComponent(url);
+        if (document.getElementById('sortField')) {
+            var sort = document.getElementById('sortField').value;
+            if (sort) q += '&sort=' + sort + '&order=' + document.getElementById('sortOrder').value;
+        }
+        window.location.href = '/' + q;
+    }
+
+    // ========== 复选框选择逻辑（直接从 DOM 读取勾选状态） ==========
+
+    /** 从 DOM 获取当前勾选的节点 ID 数组 */
+    function getSelectedIds() {
+        var ids = [];
+        document.querySelectorAll('.node-cb:checked').forEach(function(cb) {
+            ids.push(parseInt(cb.getAttribute('data-id')));
+        });
+        return ids;
+    }
+
+    /** 获取勾选数量 */
+    function getSelectedCount() {
+        return document.querySelectorAll('.node-cb:checked').length;
+    }
+
+    /** 同步全选复选框状态 */
+    function syncSelectAll() {
+        var total = document.querySelectorAll('.node-cb').length;
+        var checked = document.querySelectorAll('.node-cb:checked').length;
+        var selectAll = document.getElementById('selectAll');
+        if (!selectAll || total === 0) return;
+        selectAll.checked = (checked === total);
+        selectAll.indeterminate = (checked > 0 && checked < total);
+    }
+
+    /** 更新所有 UI */
+    function refreshUI() {
+        var count = getSelectedCount();
+        document.getElementById('selCount').textContent = count;
+        document.getElementById('selBarCount').textContent = count;
+        document.getElementById('copyBtn').disabled = (count === 0);
+        document.getElementById('deleteBtn').disabled = (count === 0);
+        var clearBtn = document.getElementById('clearSelBtn');
+        if (clearBtn) clearBtn.classList.toggle('show', count > 0);
+
+        // 高亮行
+        document.querySelectorAll('.node-cb').forEach(function(cb) {
+            var row = document.getElementById('row-' + cb.getAttribute('data-id'));
+            if (row) row.classList.toggle('selected', cb.checked);
+        });
+    }
+
+    /** 点击行切换勾选 */
+    function toggleRow(row, event) {
+        var tag = event.target.tagName.toLowerCase();
+        if (tag === 'input' || tag === 'button' || tag === 'a' || tag === 'select' || tag === 'textarea') return;
+        var cb = row.querySelector('.node-cb');
+        if (!cb) return;
+        cb.checked = !cb.checked;
+        syncSelectAll();
+        refreshUI();
+    }
+
+    /** 点击单个复选框 */
+    function onCheckboxClick() {
+        syncSelectAll();
+        refreshUI();
+    }
+
+    /** 全选/取消全选 */
+    function toggleSelectAll(checked) {
+        document.querySelectorAll('.node-cb').forEach(function(cb) { cb.checked = checked; });
+        syncSelectAll();
+        refreshUI();
+    }
+
+    /** 取消所有选择 */
+    function clearAllSelections() {
+        document.querySelectorAll('.node-cb').forEach(function(cb) { cb.checked = false; });
+        document.getElementById('selectAll').checked = false;
+        document.getElementById('selectAll').indeterminate = false;
+        refreshUI();
+    }
+
+    // ========== 复制 ==========
+    async function copySelected() {
+        var ids = getSelectedIds();
+        if (ids.length === 0) return;
+
+        showToast('正在复制...');
+
+        try {
+            var resp = await fetch('/api/copy', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: ids })
+            });
+            var text = await resp.text();
+            if (text) {
+                await navigator.clipboard.writeText(text);
+                showToast('✅ 已复制 ' + ids.length + ' 个节点到剪贴板');
+            } else {
+                showToast('⚠️ 所选节点无有效订阅链接');
+            }
+        } catch (err) {
+            showToast('❌ 复制失败: ' + err.message);
+        }
+    }
+
+    // ========== 延迟排序切换 ==========
+    function toggleSort() {
+        var sortFieldEl = document.getElementById('sortField');
+        var sortOrderEl = document.getElementById('sortOrder');
+        var currentSort = sortFieldEl ? sortFieldEl.value : '';
+        var currentOrder = sortOrderEl ? sortOrderEl.value : '';
+        var newSort, newOrder;
+        if (currentSort === 'latencyMs' && currentOrder === 'asc') {
+            newSort = 'latencyMs'; newOrder = 'desc';
+        } else if (currentSort === 'latencyMs' && currentOrder === 'desc') {
+            newSort = ''; newOrder = 'asc';
+        } else {
+            newSort = 'latencyMs'; newOrder = 'asc';
+        }
+        var size = document.getElementById('pageSizeSelect').value;
+        var url = document.getElementById('subUrl').value.trim();
+        var country = document.getElementById('countryFilter').value;
+        var q = '?page=1&size=' + size;
+        if (country) q += '&country=' + encodeURIComponent(country);
+        if (url) q += '&url=' + encodeURIComponent(url);
+        if (newSort) q += '&sort=' + newSort + '&order=' + newOrder;
+        window.location.href = '/' + q;
+    }
+
+    // ========== 删除选中节点 ==========
+    async function deleteSelected() {
+        var ids = getSelectedIds();
+        if (ids.length === 0) return;
+        if (!confirm('确认删除选中的 ' + ids.length + ' 个节点？此操作不可恢复。')) return;
+        showToast('正在删除...');
+        try {
+            var resp = await fetch('/api/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: ids })
+            });
+            var result = await resp.json();
+            if (result.success) {
+                showToast('✅ 已删除 ' + result.deleted + ' 个节点');
+                setTimeout(function() { location.reload(); }, 800);
+            } else {
+                showToast('❌ 删除失败: ' + (result.msg || '未知错误'));
+            }
+        } catch (err) {
+            showToast('❌ 删除失败: ' + err.message);
+        }
+    }
+
+    // ========== 清理失败节点 ==========
+    async function purgeFailed() {
+        if (!confirm('确认删除所有被标记为失败的节点？此操作不可恢复。')) return;
+        showToast('正在清理...');
+        try {
+            var resp = await fetch('/api/purge-failed', { method: 'POST' });
+            var result = await resp.json();
+            if (result.success) {
+                showToast('✅ 已清理 ' + result.deleted + ' 个失败节点');
+                setTimeout(function() { location.reload(); }, 800);
+            } else {
+                showToast('❌ 清理失败');
+            }
+        } catch (err) {
+            showToast('❌ 清理失败: ' + err.message);
+        }
+    }
+
+    // ========== Toast 消息 ==========
+    var toastTimer = null;
+    function showToast(msg) {
+        var el = document.getElementById('toast');
+        el.textContent = msg;
+        el.classList.add('show');
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(function() {
+            el.classList.remove('show');
+        }, 3000);
+    }
+
+    // ========== 恢复跨页选中 ==========
+    // 页面加载完成后刷新 UI
+    document.addEventListener('DOMContentLoaded', function() {
+        syncSelectAll();
+        refreshUI();
+    });
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+# Build output
+target/
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.settings/
+.classpath
+.project
+
+# Logs
+logs/
+*.log
+
+# Local config overrides (application.properties 本身不含口令，已改为提交)
+# 任何本地私有配置（含数据库/面板口令）都不应进仓库
+src/main/resources/application-*.properties
+
+# Local subscription dump
+提示.txt
+*.txt
+
+# OS
+.DS_Store
+Thumbs.db

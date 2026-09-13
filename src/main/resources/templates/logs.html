@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>操作日志</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f6fa; color: #2d3436; padding: 20px;
+            display: flex; flex-direction: column;
+        }
+        .container {
+            max-width: 1200px; margin: 0 auto;
+            display: flex; flex-direction: column;
+            height: 100%; min-height: 0;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #6c5ce7, #a29bfe);
+            color: #fff; padding: 18px 24px; border-radius: 12px; margin-bottom: 14px;
+        }
+        .header h1 { font-size: 22px; margin-bottom: 6px; }
+        .header .subtitle { font-size: 13px; opacity: 0.9; }
+        .header .stats { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
+        .header .stat-item {
+            background: rgba(255,255,255,0.15); padding: 5px 12px;
+            border-radius: 8px; font-size: 13px;
+        }
+        .header .stat-item span { font-weight: 700; font-size: 14px; }
+
+        .nav-bar {
+            background: #fff; padding: 10px 16px; border-radius: 8px;
+            margin-bottom: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            display: flex; gap: 10px; align-items: center;
+        }
+        .nav-bar a {
+            color: #6c5ce7; text-decoration: none; font-size: 13px;
+            padding: 5px 12px; border-radius: 6px; transition: background 0.15s;
+        }
+        .nav-bar a:hover { background: #f0edff; }
+        .nav-bar .active { background: #6c5ce7; color: #fff; }
+        .nav-bar .spacer { flex: 1; }
+
+        .table-wrapper {
+            background: #fff; border-radius: 12px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+            overflow: auto; flex: 1; min-height: 0;
+        }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        thead { background: #f8f9fd; }
+        th {
+            padding: 10px 12px; text-align: left; font-weight: 600;
+            color: #636e72; border-bottom: 2px solid #dfe6e9;
+            white-space: nowrap; position: sticky; top: 0; background: #f8f9fd; z-index: 1;
+        }
+        td {
+            padding: 8px 12px; border-bottom: 1px solid #f1f2f6;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        tr:hover td { background: #f8f9fd; }
+
+        .badge {
+            display: inline-block; padding: 2px 10px; border-radius: 4px;
+            font-size: 11px; font-weight: 700;
+        }
+        .badge-refresh { background: #dfe6e9; color: #2d3436; }
+        .badge-copy    { background: #6c5ce7; color: #fff; }
+        .badge-delete  { background: #d63031; color: #fff; }
+        .badge-purge   { background: #e17055; color: #fff; }
+        .badge-success { background: #00b894; color: #fff; }
+        .badge-failed  { background: #d63031; color: #fff; }
+
+        .time { font-family: "SF Mono", monospace; font-size: 12px; color: #636e72; white-space: nowrap; }
+
+        .pagination {
+            display: flex; justify-content: center; align-items: center;
+            gap: 5px; padding: 14px 0 12px; flex-wrap: wrap;
+        }
+        .pagination a, .pagination span {
+            padding: 5px 12px; border-radius: 6px; font-size: 13px; text-decoration: none;
+        }
+        .pagination a {
+            background: #fff; color: #6c5ce7; border: 1px solid #dfe6e9;
+            transition: all 0.15s;
+        }
+        .pagination a:hover { background: #f0edff; border-color: #6c5ce7; }
+        .pagination .active { background: #6c5ce7; color: #fff; border-color: #6c5ce7; }
+        .pagination .disabled { color: #b2bec3; cursor: default; pointer-events: none; }
+        .pagination .info { color: #636e72; font-size: 13px; padding: 5px 8px; }
+
+        .empty-state { text-align: center; padding: 60px 20px; color: #636e72; }
+        .empty-state .big-icon { font-size: 48px; margin-bottom: 16px; }
+
+        @media (max-width: 768px) {
+            body { padding: 10px; }
+            .header { padding: 14px 16px; }
+            th, td { padding: 6px 8px; font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <div class="header">
+        <h1>📋 操作日志</h1>
+        <div class="subtitle">记录刷新订阅、复制节点等关键操作</div>
+        <div class="stats">
+            <div class="stat-item">📝 总记录数 <span th:text="${totalCount}">0</span></div>
+        </div>
+    </div>
+
+    <div class="nav-bar">
+        <a href="/">← 返回节点列表</a>
+        <span class="spacer"></span>
+        <a th:href="@{/logs}" class="active">📋 操作日志</a>
+    </div>
+
+    <div class="table-wrapper">
+        <table th:if="${totalCount > 0}">
+            <thead>
+            <tr>
+                <th style="width:60px;">#</th>
+                <th style="width:90px;">操作时间</th>
+                <th style="width:80px;">操作类型</th>
+                <th style="width:80px;">结果</th>
+                <th style="width:70px;">节点数</th>
+                <th>操作描述</th>
+                <th style="width:120px;">客户端 IP</th>
+            </tr>
+            </thead>
+            <tbody>
+            <tr th:each="log, stat : ${logs}">
+                <td th:text="${(currentPage - 1) * 50 + stat.count}">1</td>
+                <td class="time">
+                    <span th:text="${#temporals.format(log.createdAt, 'MM-dd HH:mm')}">01-01 00:00</span>
+                </td>
+                <td>
+                    <span th:if="${log.action == 'REFRESH'}" class="badge badge-refresh">🔄 刷新</span>
+                    <span th:if="${log.action == 'COPY'}" class="badge badge-copy">📋 复制</span>
+                    <span th:if="${log.action == 'DELETE'}" class="badge badge-delete">🗑 删除</span>
+                    <span th:if="${log.action == 'PURGE'}" class="badge badge-purge">🧹 清理</span>
+                    <span th:if="${log.action != 'REFRESH' and log.action != 'COPY'
+                                   and log.action != 'DELETE' and log.action != 'PURGE'}"
+                          th:text="${log.action}">其他</span>
+                </td>
+                <td>
+                    <span th:if="${log.result == 'SUCCESS'}" class="badge badge-success">✓ 成功</span>
+                    <span th:if="${log.result == 'FAILED'}" class="badge badge-failed">✗ 失败</span>
+                    <span th:if="${log.result != 'SUCCESS' and log.result != 'FAILED'}"
+                          th:text="${log.result}">—</span>
+                </td>
+                <td th:text="${log.nodeCount}">0</td>
+                <td th:text="${log.detail}" th:title="${log.detail}">描述</td>
+                <td class="mono" th:text="${log.clientIp}" style="font-size:12px;font-family:monospace;">127.0.0.1</td>
+            </tr>
+            </tbody>
+        </table>
+
+        <div class="empty-state" th:if="${totalCount == 0}">
+            <div class="big-icon">📭</div>
+            <p>暂无操作日志</p>
+            <p style="font-size:13px; margin-top:8px; color:#b2bec3;">
+                执行刷新或复制操作后日志将出现在这里
+            </p>
+        </div>
+    </div>
+
+    <!-- 分页 -->
+    <div class="pagination" th:if="${totalPages > 1}">
+        <a th:href="@{/logs(page=1)}" th:classappend="${currentPage == 1} ? 'disabled' : ''">«</a>
+        <a th:href="@{/logs(page=${currentPage - 1})}" th:classappend="${currentPage == 1} ? 'disabled' : ''">‹</a>
+
+        <th:block th:each="i : ${#numbers.sequence(1, totalPages)}">
+            <a th:if="${i >= currentPage - 2 and i <= currentPage + 2}"
+               th:href="@{/logs(page=${i})}"
+               th:classappend="${i == currentPage} ? 'active' : ''"
+               th:text="${i}">1</a>
+        </th:block>
+
+        <a th:href="@{/logs(page=${currentPage + 1})}" th:classappend="${currentPage == totalPages} ? 'disabled' : ''">›</a>
+        <a th:href="@{/logs(page=${totalPages})}" th:classappend="${currentPage == totalPages} ? 'disabled' : ''">»</a>
+
+        <span class="info">
+            <span th:text="${currentPage}">1</span>/<span th:text="${totalPages}">1</span>页 ·
+            <span th:text="${totalCount}">0</span>条
+        </span>
+    </div>
+</div>
+</body>
+</html>
