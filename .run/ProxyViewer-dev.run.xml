@@ -1,0 +1,13 @@
+<component name="ProjectRunConfigurationManager">
+  <!-- 本地开发运行配置：用 dev profile 加载被 .gitignore 忽略的 application-dev.properties
+       （含订阅链接、数据库与面板口令等本机私有配置）。
+       该目录是 IDEA 的"共享运行配置"，可随仓库提交，团队成员按需自行创建同名私有配置文件。 -->
+  <configuration default="false" name="ProxyViewer (dev)" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="com.proxyviewer.Application" />
+    <module name="proxy-subscription-viewer" />
+    <option name="VM_PARAMETERS" value="-Dspring.profiles.active=dev" />
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>

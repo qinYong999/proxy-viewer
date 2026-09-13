@@ -114,14 +114,18 @@ $env:SUBSCRIPTION_URL = "你的订阅链接"
 $env:APP_PASSWORD = "你的面板口令"
 ```
 
-也可以在本机新建 `src/main/resources/application-dev.properties` 存放私有配置（含口令，已被 `.gitignore` 忽略），但**必须激活对应 profile 才会生效**：
+本机私有配置（订阅链接、数据库/面板口令）建议放在 `src/main/resources/application-dev.properties` —— 它已被 `.gitignore` 忽略，不会进仓库。
 
-```powershell
-java -jar target/proxy-subscription-viewer-1.0.0.jar --spring.profiles.active=dev
-# 或：$env:SPRING_PROFILES_ACTIVE = "dev"
-```
+它是 **profile 专属配置，必须激活 `dev` profile 才会加载**；而仓库里的 `application.properties` 刻意**不指定任何 profile**（保持仓库中立），激活方式任选：
 
-> 注意：`application-*.properties` 是 profile 专属配置，不激活 profile 时不会被加载 —— 不熟悉 profile 的话，直接用上面的环境变量注入更省事。
+| 场景 | 做法 |
+|------|------|
+| **IntelliJ IDEA** | 直接用仓库自带的共享运行配置 **`.run/ProxyViewer-dev.run.xml`**（VM options: `-Dspring.profiles.active=dev`）。若提示找不到模块，在 Run 配置里把模块重新选成 `proxy-subscription-viewer` 即可 |
+| 命令行运行 jar | `java -jar target/proxy-subscription-viewer-1.0.0.jar --spring.profiles.active=dev` |
+| 环境变量 | `$env:SPRING_PROFILES_ACTIVE = "dev"` |
+| Maven 启动 | `mvn spring-boot:run "-Dspring-boot.run.profiles=dev"` |
+
+> 不想用 profile 也可以：直接把第 1 步里的环境变量（`DB_PASSWORD` / `SUBSCRIPTION_URL` / `APP_PASSWORD`）注入即可，无需任何 profile 文件。
 
 ### 3. 构建并运行
 

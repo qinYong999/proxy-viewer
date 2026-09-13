@@ -46,6 +46,34 @@ class ConfigurationHygieneTest {
                 .containsExactly(EXPECTED_ASSIGNMENT);
     }
 
+    /** 仓库配置保持中立：本地 dev profile 只能由运行参数/环境变量激活，不能写进提交的配置 */
+    @Test
+    void committedPropertiesDoNotActivateAnyProfile() throws IOException {
+        List<String> activations = Files.readAllLines(RESOURCES.resolve("application.properties"),
+                        StandardCharsets.UTF_8).stream()
+                .map(String::trim)
+                .filter(line -> !line.startsWith("#"))
+                .filter(line -> line.startsWith("spring.profiles.active")
+                        || line.startsWith("spring.config.activate.on-profile"))
+                .toList();
+
+        assertThat(activations)
+                .as("不应在提交的配置里激活 profile（应改用运行参数，见 .run/ProxyViewer-dev.run.xml）")
+                .isEmpty();
+    }
+
+    /** IDEA 共享运行配置必须存在，否则本地私有配置（application-dev.properties）不会被加载 */
+    @Test
+    void ideaSharedRunConfigurationActivatesDevProfile() throws IOException {
+        Path runConfig = Path.of(".run", "ProxyViewer-dev.run.xml");
+
+        assertThat(runConfig).as("缺少 IDEA 共享运行配置").exists();
+        String content = Files.readString(runConfig, StandardCharsets.UTF_8);
+        assertThat(content)
+                .contains("-Dspring.profiles.active=dev")
+                .contains("com.proxyviewer.Application");
+    }
+
     @Test
     void noSourceFileHardcodesADefaultSubscriptionUrl() throws IOException {
         try (Stream<Path> files = Files.walk(Path.of("src", "main"))) {
