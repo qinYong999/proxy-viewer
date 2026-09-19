@@ -6,7 +6,7 @@
 
 ## 功能概览
 
-- 🔄 **订阅抓取** — base64 或明文订阅均可，自动识别；三级传输降级（本地代理 → 直连 → DoH + 裸 TLS 直连）应对被污染的本地 DNS
+- 🔄 **订阅抓取** — base64 或明文订阅均可，自动识别；传输逐级降级（配置的代理候选 → 直连 → DoH + 裸 TLS 直连）应对被污染的本地 DNS；SOCKS5 代理由自研实现，主机名交代理侧解析
 - 📦 **增量入库** — 按节点指纹做差集（新增/更新/删除），未变化节点保留主键与测速结果，订阅内重复条目自动去重
 - 📋 **节点展示** — 表格展示地址、端口、协议、传输、TLS、路径、SNI、Host，支持 20/50/100/200 分页与跳页
 - 🔍 **国家筛选** — 按国家/地区筛选，统计数据（总数/VLESS/VMESS/WS/TCP/可达/失败）同步更新
@@ -28,7 +28,7 @@
 | 模板引擎 | Thymeleaf |
 | 前端 | 原生 HTML/CSS/JS（无构建步骤） |
 | 构建 | Maven 3.9+ |
-| HTTP 客户端 | `java.net.http.HttpClient` + 裸 `SSLSocket`（DoH 降级通道） |
+| HTTP 客户端 | `java.net.http.HttpClient`（HTTP 代理与直连）+ 自研 `Socks5HttpClient`（SOCKS5，含 TLS）+ 裸 `SSLSocket`（DoH 降级通道） |
 | 测试 | JUnit 5 + AssertJ + MockMvc |
 
 ## 项目结构
@@ -65,7 +65,7 @@ proxy-viewer/
     │   │   │   ├── OperationLog.java                 操作日志
     │   │   │   └── OperationLogRepository.java
     │   │   └── service/
-    │   │       ├── SubscriptionService.java          抓取 + 解码（三级降级）
+    │   │       ├── SubscriptionService.java          抓取 + 解码（代理 → 直连 → DoH 降级）
     │   │       ├── NodeParser.java                   协议解析 + 国家识别
     │   │       ├── Base64Codec.java                  Base64 三变体解码
     │   │       ├── SubscriptionUrlValidator.java     订阅地址校验（防 SSRF）
@@ -375,7 +375,13 @@ A: 首次启动不会自动抓取（旧版 README 曾这样描述，属于文档
 A: 设置环境变量 `APP_PASSWORD` 后重启；或直接看启动日志里打印的随机口令。
 
 **Q: 订阅刷新失败（connect timed out）？**
-A: 本地 DNS 可能被污染。应用会依次尝试：本地代理（`127.0.0.1:10808` SOCKS5 / `10809` HTTP）→ 直连 → DoH 手动解析 + 裸 TLS 直连。若使用 v2rayN，请确认端口为默认的 10808/10809，或用 `app.subscription.proxy-candidates` 自定义。
+A: 说明所有通道都没走通，页面上的失败信息会逐个列出原因。抓取顺序是：`app.subscription.proxy-candidates`
+里的代理候选（`socks5://127.0.0.1:10808` 走自研 SOCKS5 实现，主机名交代理侧解析；`http://127.0.0.1:10809`
+走 JDK HttpClient）→ 直连 → DoH 手动解析 + 裸 TLS 直连。判断方法：
+- 看到"连接被拒绝"→ 本地代理端口没监听（v2rayN 没开，或端口不是 10808/10809）
+- 看到"连接超时"→ 代理在跑但代理本身出不了网（节点/路由没连上）
+- 看到"DNS 解析失败"→ 走的是直连通道，而本地 DNS 被污染
+- 只有 DoH 那一路失败是正常的：国内通常到不了 `8.8.8.8`，它只是最后的兜底
 
 **Q: 为什么有些节点没有速度？**
 A: 明文 TCP 节点无法做 HTTP 测速，速度列为 `N/A` 属正常；只有 TLS/WS 节点会做限时下载测速。测速可通过 `app.test.speed-test-enabled=false` 关闭。

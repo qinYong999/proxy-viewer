@@ -2,6 +2,7 @@ package com.proxyviewer.service;
 
 import com.proxyviewer.config.AppProperties;
 import com.proxyviewer.model.ProxyNode;
+import com.proxyviewer.service.test.Socks5HttpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -48,6 +49,8 @@ public class SubscriptionService {
 
     /** 单次订阅响应体上限，避免异常大响应打爆内存 */
     private static final int MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+    /** SOCKS5 通道手工跟随重定向的最大跳数（JDK HttpClient 会自动跟随，自研实现需自己来） */
+    private static final int MAX_REDIRECTS = 5;
 
     private final AppProperties props;
     private final NodeSyncService syncService;
@@ -152,54 +155,144 @@ public class SubscriptionService {
     }
 
     private String fetchSubscription(URI uri) throws Exception {
-        Exception lastError = null;
+        List<String> failures = new ArrayList<>();
 
         for (Transport transport : buildTransports()) {
             try {
                 log.info("尝试通过 {} 获取订阅...", transport.description());
-                HttpRequest request = HttpRequest.newBuilder()
-                        .uri(uri)
-                        .timeout(Duration.ofSeconds(props.getSubscription().getRequestTimeoutSeconds()))
-                        .GET()
-                        .build();
-                HttpResponse<String> response = transport.client()
-                        .send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-
-                // 跟随重定向后要重新校验最终地址，防止用 302 绕过内网校验
-                SubscriptionUrlValidator.validateUri(response.uri(),
-                        props.getSubscription().isAllowPrivateHosts());
-
-                if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    String body = response.body();
-                    if (body != null && !body.isBlank()) {
-                        log.info("通过 {} 成功获取订阅 (HTTP {})", transport.description(), response.statusCode());
-                        return body.trim();
-                    }
-                    log.warn("{} 返回空内容", transport.description());
-                } else {
-                    log.warn("{} 返回 HTTP {}", transport.description(), response.statusCode());
-                }
+                String body = transport.fetcher().fetch(uri);
+                log.info("通过 {} 成功获取订阅（{} 字符）", transport.description(), body.length());
+                return body;
             } catch (Exception e) {
-                lastError = e;
-                log.warn("{} 失败: {}", transport.description(), e.getMessage());
+                String reason = describeFailure(e);
+                failures.add(transport.description() + " → " + reason);
+                log.warn("{} 失败: {}", transport.description(), reason);
             }
         }
 
-        if (!props.getSubscription().isRawSocketFallbackEnabled()) {
-            throw new RuntimeException("所有传输通道均失败: "
-                    + (lastError == null ? "未知原因" : lastError.getMessage()));
+        if (props.getSubscription().isRawSocketFallbackEnabled()) {
+            log.info("所有代理/直连方式失败，尝试 DoH 解析 + 裸 SSLSocket 直连...");
+            try {
+                return fetchViaRawSocket(uri);
+            } catch (Exception e) {
+                String reason = describeFailure(e);
+                failures.add("DoH+" + uri.getHost() + " → " + reason);
+                log.warn("DoH 直连失败: {}", reason);
+            }
         }
 
-        log.info("所有 HttpClient 方式失败，尝试 DoH 解析 + 裸 SSLSocket 直连...");
-        try {
-            return fetchViaRawSocket(uri);
-        } catch (Exception e) {
-            throw new RuntimeException("直连也失败: " + e.getMessage()
-                    + (lastError == null ? "" : " (原始错误: " + lastError.getMessage() + ")"));
-        }
+        // 把每个通道的失败原因都带上：只报最后一条会让"到底卡在哪"无法判断
+        throw new RuntimeException("订阅抓取失败（" + truncate(String.join("；", failures), 400) + "）");
     }
 
-    private record Transport(String description, HttpClient client) {
+    /**
+     * 经 SOCKS5 代理抓取订阅。
+     *
+     * <p>必须走自研的 {@link Socks5HttpClient}：JDK 的 {@code HttpClient} 不支持 SOCKS，
+     * 配置了也会被静默忽略、退化成直连。主机名一律交给代理侧解析（{@code remoteDns=true}），
+     * 这样本地 DNS 被污染时依然能连到真实订阅地址。</p>
+     */
+    private String fetchViaSocks5(String proxyHost, int proxyPort, URI uri) throws Exception {
+        AppProperties.Subscription cfg = props.getSubscription();
+        int connectMs = cfg.getConnectTimeoutSeconds() * 1000;
+        int readMs = cfg.getRequestTimeoutSeconds() * 1000;
+
+        URI current = uri;
+        for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
+            Socks5HttpClient.Response response = Socks5HttpClient.get(proxyHost, proxyPort, current,
+                    connectMs, readMs, MAX_RESPONSE_BYTES, true);
+
+            if (isRedirect(response.status())) {
+                String location = headerValue(response.headers(), "location");
+                if (location == null || location.isBlank()) {
+                    throw new IOException("HTTP " + response.status() + " 重定向但缺少 Location");
+                }
+                URI next = current.resolve(location.trim());
+                // 重定向后的地址同样要过 SSRF 校验，防止用 302 绕到内网
+                SubscriptionUrlValidator.validateUri(next, cfg.isAllowPrivateHosts());
+                log.info("订阅重定向: {} → {}", current.getHost(), next.getHost());
+                current = next;
+                continue;
+            }
+            if (!response.isSuccess()) {
+                throw new IOException("HTTP " + response.status());
+            }
+            String body = response.bodyText();
+            if (body == null || body.isBlank()) {
+                throw new IOException("HTTP " + response.status() + " 但响应体为空");
+            }
+            return body.trim();
+        }
+        throw new IOException("重定向次数超过 " + MAX_REDIRECTS + " 次");
+    }
+
+    /** 经 JDK HttpClient 抓取（HTTP 代理与直连共用；JDK 原生支持 HTTP 代理与自动重定向） */
+    private String fetchViaHttpClient(HttpClient client, URI uri) throws Exception {
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(uri)
+                .timeout(Duration.ofSeconds(props.getSubscription().getRequestTimeoutSeconds()))
+                .GET()
+                .build();
+        HttpResponse<String> response = client.send(request,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+
+        // 跟随重定向后要重新校验最终地址，防止用 302 绕过内网校验
+        SubscriptionUrlValidator.validateUri(response.uri(),
+                props.getSubscription().isAllowPrivateHosts());
+
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new IOException("HTTP " + response.statusCode());
+        }
+        String body = response.body();
+        if (body == null || body.isBlank()) {
+            throw new IOException("HTTP " + response.statusCode() + " 但响应体为空");
+        }
+        return body.trim();
+    }
+
+    private static boolean isRedirect(int status) {
+        return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    }
+
+    private static String headerValue(String headers, String name) {
+        if (headers == null) {
+            return null;
+        }
+        for (String line : headers.split("\r\n")) {
+            int colon = line.indexOf(':');
+            if (colon > 0 && line.substring(0, colon).trim().equalsIgnoreCase(name)) {
+                return line.substring(colon + 1).trim();
+            }
+        }
+        return null;
+    }
+
+    /** 把异常翻译成页面/日志里能直接看懂的原因 */
+    static String describeFailure(Exception e) {
+        if (e instanceof java.net.http.HttpTimeoutException || e instanceof SocketTimeoutException) {
+            return "连接超时";
+        }
+        if (e instanceof java.net.ConnectException) {
+            return "连接被拒绝";
+        }
+        if (e instanceof java.net.UnknownHostException) {
+            return "DNS 解析失败";
+        }
+        String message = e.getMessage();
+        return (message == null || message.isBlank()) ? e.getClass().getSimpleName() : message;
+    }
+
+    private static String truncate(String text, int maxLength) {
+        return text.length() <= maxLength ? text : text.substring(0, maxLength) + "…";
+    }
+
+    private record Transport(String description, Fetcher fetcher) {
+    }
+
+    /** 一种抓取通道：成功返回订阅原文，失败抛异常（消息用于诊断展示） */
+    @FunctionalInterface
+    private interface Fetcher {
+        String fetch(URI uri) throws Exception;
     }
 
     private List<Transport> buildTransports() {
@@ -211,16 +304,30 @@ public class SubscriptionService {
             try {
                 URI proxyUri = URI.create(candidate.trim());
                 String scheme = proxyUri.getScheme() == null ? "" : proxyUri.getScheme().toLowerCase();
-                Proxy.Type type = scheme.startsWith("socks") ? Proxy.Type.SOCKS : Proxy.Type.HTTP;
-                int port = proxyUri.getPort() > 0 ? proxyUri.getPort()
-                        : (type == Proxy.Type.SOCKS ? 1080 : 8080);
-                transports.add(new Transport(candidate.trim(),
-                        buildProxyClient(new Proxy(type, new InetSocketAddress(proxyUri.getHost(), port)))));
+                String host = proxyUri.getHost();
+                if (host == null || host.isBlank()) {
+                    throw new IllegalArgumentException("缺少主机名");
+                }
+                boolean socks = scheme.startsWith("socks");
+                int port = proxyUri.getPort() > 0 ? proxyUri.getPort() : (socks ? 1080 : 8080);
+                if (socks) {
+                    // 这里绝不能用 JDK 的 HttpClient：它不支持 SOCKS，会静默忽略代理配置改成直连，
+                    // 订阅域名被墙时就只剩 connect timeout（这正是"点击刷新必然失败"的老问题）
+                    final String proxyHost = host;
+                    final int proxyPort = port;
+                    transports.add(new Transport(candidate.trim(),
+                            target -> fetchViaSocks5(proxyHost, proxyPort, target)));
+                } else {
+                    HttpClient client = buildProxyClient(
+                            new Proxy(Proxy.Type.HTTP, new InetSocketAddress(host, port)));
+                    transports.add(new Transport(candidate.trim(),
+                            target -> fetchViaHttpClient(client, target)));
+                }
             } catch (Exception e) {
                 log.warn("代理配置无法解析，已跳过: {} ({})", candidate, e.getMessage());
             }
         }
-        transports.add(new Transport("直连(系统DNS)", httpClient));
+        transports.add(new Transport("直连(系统DNS)", target -> fetchViaHttpClient(httpClient, target)));
         return transports;
     }
 
