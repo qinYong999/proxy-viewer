@@ -218,6 +218,21 @@
         </div>
     </div>
 
+    <!-- 代理内核状态：测不出来时先看这里，比逐个节点排查快得多 -->
+    <div class="error-banner" th:if="${!coreAvailable}" style="margin-bottom:12px;">
+        ⚠️ <b>未找到代理内核（Xray）</b>，无法做真实代理测试 —— 节点会被判为「未测」而非「失败」。
+        请把 <code>app.test.core-path</code> 指向内核可执行文件，或用
+        <code>app.test.core-dir</code> 指向内核所在目录（v2rayN 便携版通常是
+        <code>…\v2rayN-windows-64\bin</code>）。
+    </div>
+
+    <!-- 测试进度：测试在服务端同步执行，页面按秒轮询进度 -->
+    <div class="msg-banner" th:if="${testRunning}" id="testProgress">
+        ⏳ 正在测试：<b th:text="${testPhase}">阶段</b>
+        <span th:if="${testTotal > 0}"
+              th:text="'（' + ${testDone} + ' / ' + ${testTotal} + '）'">(0/0)</span>
+    </div>
+
     <!-- 消息/错误 -->
     <div class="msg-banner" th:if="${msg != null}" th:text="${msg}">消息</div>
     <div class="error-banner" th:if="${error != null}" th:text="${error}">错误</div>
@@ -255,6 +270,15 @@
 
         <a href="/logs" class="btn-outline" style="font-size:12px; padding:4px 10px;">📋 日志</a>
         <a href="/test-logs" class="btn-outline" style="font-size:12px; padding:4px 10px;">🔍 测速</a>
+
+        <!-- 测试直接在本页发起：测试期间页面会自动轮询进度 -->
+        <form method="post" action="/test" style="display:inline; margin:0;">
+            <button type="submit" class="btn-outline"
+                    style="font-size:12px; padding:4px 10px;"
+                    th:disabled="${testRunning or !coreAvailable}"
+                    th:title="${coreAvailable} ? '为每个节点启动真实内核，经代理访问外网测延迟' : '未找到代理内核，无法测试'"
+                    th:text="${testRunning} ? '⏳ 测试中…' : '🚀 测试真实可用性'">🚀 测试真实可用性</button>
+        </form>
 
         <span style="flex:1;"></span>
 
@@ -307,11 +331,13 @@
                 <th>路径<span class="resize-handle"></span></th>
                 <th>SNI<span class="resize-handle"></span></th>
                 <th>Host<span class="resize-handle"></span></th>
-                <th style="width:70px;" class="sortable" onclick="toggleSort()">
+                <th style="width:70px;" class="sortable" onclick="toggleSort()"
+                    title="真实延迟：为节点启动代理内核，经它访问 cp.cloudflare.com/generate_204 实测往返耗时">
                     延迟<span class="sort-arrow" th:if="${currentSort == 'latencyMs'}" th:text="${currentOrder == 'asc' ? '▲' : '▼'}"></span>
                     <span class="resize-handle"></span>
                 </th>
-                <th style="width:70px;">速度<span class="resize-handle"></span></th>
+                <th style="width:70px;"
+                    title="限时下载测速（经节点代理真实下载），仅对延迟通过的节点执行">速度<span class="resize-handle"></span></th>
                 <th style="width:85px;">测试时间<span class="resize-handle"></span></th>
             </tr>
             </thead>
@@ -719,6 +745,15 @@
             el.classList.remove('show');
         }, 3000);
     }
+
+    // ========== 测试进度轮询 ==========
+    // 测试在服务端同步执行（每个节点都要起一次内核，整批可能持续数分钟），
+    // 因此在测试期间按秒重新拉取页面，让进度条推进。
+    (function pollTestProgress() {
+        var banner = document.getElementById('testProgress');
+        if (!banner) return;
+        setTimeout(function() { location.reload(); }, 3000);
+    })();
 
     // ========== 恢复跨页选中 ==========
     // 页面加载完成后刷新 UI

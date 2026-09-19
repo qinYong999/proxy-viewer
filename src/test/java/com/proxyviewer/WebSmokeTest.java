@@ -77,7 +77,7 @@ class WebSmokeTest {
 
         mockMvc.perform(get("/test-logs").header(HttpHeaders.AUTHORIZATION, AUTH))
                 .andExpect(status().isOk())
-                .andExpect(content().string(containsString("节点连通性测试")))
+                .andExpect(content().string(containsString("节点真实可用性测试")))
                 .andExpect(content().string(containsString("手动测试")))
                 .andExpect(content().string(containsString("测试失败只标记")));
     }

@@ -225,6 +225,16 @@ public class NodeParser {
         node.setSni(params.getOrDefault("sni", ""));
         node.setFp(params.getOrDefault("fp", ""));
         node.setAlpn(params.getOrDefault("alpn", ""));
+        // 生成内核配置所必需、但早期版本未解析的参数。
+        // 缺 flow / pbk / sid / serviceName 会让 Reality、gRPC 节点必然握手失败，
+        // 从而在测试时被误判成"节点已失效"。
+        node.setFlow(params.getOrDefault("flow", ""));
+        node.setEncryption(params.getOrDefault("encryption", ""));
+        node.setPublicKey(firstNonBlank(params.get("pbk"), params.get("publicKey")));
+        node.setShortId(firstNonBlank(params.get("sid"), params.get("shortId")));
+        node.setSpiderX(firstNonBlank(params.get("spx"), params.get("spiderX")));
+        node.setServiceName(params.getOrDefault("serviceName", ""));
+        node.setHeaderType(params.getOrDefault("headerType", ""));
 
         String displayName = fragment.isEmpty() ? (server + ":" + port) : fragment;
         // 二次解码处理双编码的节点名
@@ -270,6 +280,9 @@ public class NodeParser {
         node.setSni(getText(json, "sni"));
         node.setFp(getText(json, "fp"));
         node.setAlpn(getText(json, "alpn"));
+        // vmess 的 "type" 是伪装头类型（none/http），不要和 "net"（传输方式）混淆
+        node.setHeaderType(getText(json, "type"));
+        node.setServiceName(getText(json, "serviceName"));
         if (json.has("skip-cert-verify") && !json.get("skip-cert-verify").isNull()) {
             node.setSkipCertVerify(json.get("skip-cert-verify").asBoolean(false));
         }
@@ -410,5 +423,15 @@ public class NodeParser {
     private static String getText(JsonNode node, String field) {
         JsonNode f = node.get(field);
         return (f != null && !f.isNull()) ? f.asText() : "";
+    }
+
+    /** 返回第一个非空白值；全为空时返回空串（不同订阅对同一参数用不同键名） */
+    private static String firstNonBlank(String... values) {
+        for (String v : values) {
+            if (v != null && !v.isBlank()) {
+                return v;
+            }
+        }
+        return "";
     }
 }

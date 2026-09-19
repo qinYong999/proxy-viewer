@@ -58,6 +58,37 @@ public class ProxyNode {
     @Column(length = 50)
     private String alpn;          // ALPN
 
+    /**
+     * VLESS flow（如 {@code xtls-rprx-vision}）。
+     * 缺失会导致 Reality/Vision 节点生成的内核配置必然握手失败，进而被误判为节点失效。
+     */
+    @Column(length = 50)
+    private String flow;
+
+    /** VLESS 加密方式（通常为 {@code none}） */
+    @Column(length = 50)
+    private String encryption;
+
+    /** REALITY 公钥（分享链接参数 {@code pbk}），属敏感参数 */
+    @Column(name = "public_key", length = 200)
+    private String publicKey;
+
+    /** REALITY shortId（分享链接参数 {@code sid}） */
+    @Column(name = "short_id", length = 100)
+    private String shortId;
+
+    /** REALITY spiderX（分享链接参数 {@code spx}） */
+    @Column(name = "spider_x", length = 200)
+    private String spiderX;
+
+    /** gRPC 传输的 serviceName / xhttp 的 mode */
+    @Column(name = "service_name", length = 200)
+    private String serviceName;
+
+    /** TCP 伪装头类型：none / http（分享链接参数 {@code headerType}） */
+    @Column(name = "header_type", length = 20)
+    private String headerType;
+
     @Column(name = "skip_cert_verify")
     private boolean skipCertVerify;
 
@@ -142,6 +173,27 @@ public class ProxyNode {
 
     public String getAlpn() { return alpn; }
     public void setAlpn(String alpn) { this.alpn = alpn; }
+
+    public String getFlow() { return flow; }
+    public void setFlow(String flow) { this.flow = flow; }
+
+    public String getEncryption() { return encryption; }
+    public void setEncryption(String encryption) { this.encryption = encryption; }
+
+    public String getPublicKey() { return publicKey; }
+    public void setPublicKey(String publicKey) { this.publicKey = publicKey; }
+
+    public String getShortId() { return shortId; }
+    public void setShortId(String shortId) { this.shortId = shortId; }
+
+    public String getSpiderX() { return spiderX; }
+    public void setSpiderX(String spiderX) { this.spiderX = spiderX; }
+
+    public String getServiceName() { return serviceName; }
+    public void setServiceName(String serviceName) { this.serviceName = serviceName; }
+
+    public String getHeaderType() { return headerType; }
+    public void setHeaderType(String headerType) { this.headerType = headerType; }
 
     public boolean isSkipCertVerify() { return skipCertVerify; }
     public void setSkipCertVerify(boolean skipCertVerify) { this.skipCertVerify = skipCertVerify; }

@@ -105,6 +105,9 @@ public final class NodeReconciler {
     /**
      * 把订阅里解析出的新值覆盖到库中实体上，但保留主键与测试结果字段
      * （latency/speed/lastTestTime/lastTestResult/consecutiveFailures）。
+     *
+     * <p>这是白名单式拷贝：<b>实体新增字段必须同步加到这里</b>，否则刷新订阅时该字段
+     * 永远不会被更新，内核配置会一直沿用首次入库时的旧参数。</p>
      */
     static void copyMutableFields(ProxyNode target, ProxyNode source) {
         target.setName(source.getName());
@@ -121,6 +124,13 @@ public final class NodeReconciler {
         target.setAid(source.getAid());
         target.setFp(source.getFp());
         target.setAlpn(source.getAlpn());
+        target.setFlow(source.getFlow());
+        target.setEncryption(source.getEncryption());
+        target.setPublicKey(source.getPublicKey());
+        target.setShortId(source.getShortId());
+        target.setSpiderX(source.getSpiderX());
+        target.setServiceName(source.getServiceName());
+        target.setHeaderType(source.getHeaderType());
         target.setSkipCertVerify(source.isSkipCertVerify());
         target.setCountryCode(source.getCountryCode());
         target.setCountryName(source.getCountryName());

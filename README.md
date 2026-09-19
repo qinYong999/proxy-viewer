@@ -37,6 +37,15 @@
 proxy-viewer/
 ├── pom.xml
 ├── README.md
+├── docs/
+│   ├── v2rayn-testing-reference.md                  v2rayN 节点测试实现调研（重构依据）
+│   └── v2rayn-speedtest-udptest-findings.md          v2rayN 测速/UDP 测试细节补充
+├── db/
+│   ├── schema-comments.sql                          表注释 + 字段注释（MySQL，可重复执行）
+│   └── _tools/
+│       ├── gen_schema_comments.py                   依据 information_schema 生成上述 SQL
+│       ├── verify_schema_comments.py                克隆表试跑 + 逐列比对校验
+│       └── show_schema_comments.py                  以 UTF-8 打印现有注释便于核对
 └── src/
     ├── main/
     │   ├── java/com/proxyviewer/
@@ -49,7 +58,7 @@ proxy-viewer/
     │   │   ├── controller/
     │   │   │   └── ProxyController.java              页面路由 + JSON API
     │   │   ├── model/
-    │   │   │   ├── ProxyNode.java                    节点实体（含测试结果字段）
+    │   │   │   ├── ProxyNode.java                    节点实体（含测试结果与内核参数）
     │   │   │   ├── ProxyNodeRepository.java
     │   │   │   ├── NodeTestRecord.java               测试批次记录
     │   │   │   ├── NodeTestRecordRepository.java
@@ -62,7 +71,11 @@ proxy-viewer/
     │   │       ├── SubscriptionUrlValidator.java     订阅地址校验（防 SSRF）
     │   │       ├── NodeReconciler.java               增量对账（纯函数，可单测）
     │   │       ├── NodeSyncService.java              对账落库 + 清理失败节点
-    │   │       └── NodeTestService.java              并发连通性测试 + 测速
+    │   │       ├── NodeTestService.java              测试编排：TCPing → 真实延迟 → 测速
+    │   │       └── test/
+    │   │           ├── XrayCoreService.java          内核配置生成 + 进程托管
+    │   │           ├── Socks5HttpClient.java         自研 SOCKS5 + HTTP/TLS（JDK 不支持 SOCKS；抓订阅与测节点共用）
+    │   │           └── NodeTester.java               单节点真实延迟/测速/UDP 探测
     │   └── resources/
     │       ├── application.properties                默认配置（敏感项走环境变量）
     │       ├── logback-spring.xml                    控制台 + 全量日志 + 独立 OPLOG
@@ -74,11 +87,8 @@ proxy-viewer/
         ├── support/IntegrationTest.java              集成测试组合注解（H2 + MockMvc）
         ├── WebSmokeTest.java                         认证/同源/模板渲染
         ├── NodeSyncIntegrationTest.java              增量刷新与失败标记（真实数据库）
-        └── service/
-            ├── NodeParserTest.java                   VLESS/VMESS/国家识别
-            ├── NodeReconcilerTest.java               增量对账
-            ├── SubscriptionPayloadTest.java          Base64/chunked/明文订阅
-            └── SubscriptionUrlValidatorTest.java     SSRF 校验
+        ├── RealProxyEndToEndTest.java                自建内核服务端的真实闭环验证
+        └── service/ + service/test/                  解析、对账、内核配置、SOCKS5、探测
 ```
 
 ## 快速开始
@@ -97,7 +107,22 @@ CREATE DATABASE IF NOT EXISTS proxy_viewer
   COLLATE utf8mb4_unicode_ci;
 ```
 
-### 2. 配置
+### 2. 补充表注释 / 字段注释（可选）
+
+表结构由 JPA 实体通过 `ddl-auto=update` 自动创建，**Hibernate 不会写入任何注释**。仓库用 `db/schema-comments.sql` 补齐三张表的中文表注释与全部字段注释：
+
+```powershell
+mysql -h 127.0.0.1 -uroot -p --default-character-set=utf8mb4 < db/schema-comments.sql
+```
+
+- 必须带 `--default-character-set=utf8mb4`，否则中文注释会乱码；
+- 脚本可重复执行，列定义取自库中真实结构，只追加注释、不改字段；
+- 注释文案维护在 `db/_tools/gen_schema_comments.py` 中，改完重新生成即可；
+- `db/_tools/` 另有两个辅助脚本：`verify_schema_comments.py` 先在克隆表上试跑并逐列比对，`show_schema_comments.py` 按 UTF-8 打印现有注释便于核对。
+
+> 若之后实体字段发生增删改，`ddl-auto=update` 重建该列时其注释会随之丢失，重新执行一次本脚本即可恢复。
+
+### 3. 配置
 
 `src/main/resources/application.properties` **已随仓库提交**，且不含任何口令、也不含任何订阅链接 —— 所有私有项都用环境变量占位。最少需要提供数据库口令与订阅链接：
 
@@ -127,14 +152,14 @@ $env:APP_PASSWORD = "你的面板口令"
 
 > 不想用 profile 也可以：直接把第 1 步里的环境变量（`DB_PASSWORD` / `SUBSCRIPTION_URL` / `APP_PASSWORD`）注入即可，无需任何 profile 文件。
 
-### 3. 构建并运行
+### 4. 构建并运行
 
 ```powershell
 mvn clean package
 java -jar target/proxy-subscription-viewer-1.0.0.jar
 ```
 
-### 4. 访问
+### 5. 访问
 
 打开 <http://localhost:8080>，输入用户名（默认 `admin`）与口令。
 
@@ -169,8 +194,21 @@ java -jar target/proxy-subscription-viewer-1.0.0.jar
 | `app.subscription.raw-socket-fallback-enabled` | `RAW_SOCKET_FALLBACK` | `true` | 代理/直连都失败时用 DoH + 裸 TLS |
 | `app.subscription.doh-server-ip` / `doh-server-host` | `DOH_SERVER_IP` / `DOH_SERVER_HOST` | `8.8.8.8` / `dns.google` | DoH 解析器 |
 | `app.subscription.keep-data-on-empty-result` | — | `true` | 抓取为空时保留旧数据 |
-| `app.test.thread-pool-size` | `TEST_THREADS` | `20` | 测试并发度 |
-| `app.test.speed-test-enabled` | — | `true` | 是否对 TLS 节点测速 |
+| `app.test.core-path` | `XRAY_PATH` | 空（自动探测） | Xray 内核可执行文件路径 |
+| `app.test.core-dir` | `XRAY_DIR` | 空（自动探测） | 内核所在目录；v2rayN 便携版通常是 `…\v2rayN-windows-64\bin` |
+| `app.test.core-asset-dir` | `XRAY_ASSET_DIR` | 空（用内核目录） | 含 `geoip.dat`/`geosite.dat` 的目录，作为 `XRAY_LOCATION_ASSET` 传给内核 |
+| `app.test.core-startup-timeout-ms` | — | `8000` | 内核启动到就绪的最长等待（就绪判定是真实 SOCKS5 握手） |
+| `app.test.tcping-pre-filter` | `TCPING_PREFILTER` | `true` | 先用 TCPing 剔除端口不通的节点，不为死节点启动内核 |
+| `app.test.tcping-threads` / `tcping-timeout-ms` | — | `50` / `5000` | TCPing 并发度与超时 |
+| `app.test.latency-concurrency` | `TEST_LATENCY_CONCURRENCY` | `8` | 真实延迟测试的**并发内核数** |
+| `app.test.latency-test-url` | `LATENCY_TEST_URL` | `http://cp.cloudflare.com/generate_204` | 真实延迟探测地址，要求返回 204/200 |
+| `app.test.latency-timeout-ms` / `latency-attempts` | — | `5000` / `2` | 单次探测超时；连测次数（取最小值） |
+| `app.test.speed-test-enabled` | `SPEED_TEST_ENABLED` | `true` | 是否对延迟通过的节点做下载测速 |
+| `app.test.speed-test-url` | `SPEED_TEST_URL` | `https://speed.cloudflare.com/__down?bytes=50000000` | 测速下载地址 |
+| `app.test.speed-test-duration-ms` | — | `10000` | 限时下载时长，到点即中断 |
+| `app.test.speed-concurrency` | — | `3` | 测速并发内核数（测速会争抢带宽，不宜高） |
+| `app.test.udp-test-enabled` | `UDP_TEST_ENABLED` | `false` | 是否做 UDP 可用性测试（会明显拉长整批耗时） |
+| `app.test.udp-test-target` | — | `ntp:pool.ntp.org` | UDP 探测目标，格式 `类型:主机[:端口]`，类型支持 `ntp`/`dns` |
 | `app.test.auto-delete-after-failures` | `AUTO_DELETE_AFTER_FAILURES` | `0` | 连续失败 N 次后自动删除，`0`=永不 |
 | `app.test.schedule-enabled` | `TEST_SCHEDULE_ENABLED` | `true` | 定时测试开关 |
 | `app.test.schedule-fixed-rate-ms` | — | `21600000` | 测试周期（6 小时） |
@@ -180,14 +218,14 @@ java -jar target/proxy-subscription-viewer-1.0.0.jar
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/` | 主页：节点分页、国家筛选、延迟排序、统计 |
+| GET | `/` | 主页：节点分页、国家筛选、延迟排序、统计；含「🚀 测试真实可用性」按钮与实时进度 |
 | POST | `/refresh` | 抓取订阅并增量入库（PRG 重定向回首页） |
-| POST | `/test` | 手动触发连通性测试，完成后跳转 `/test-logs` |
+| POST | `/test` | 手动触发**真实可用性测试**，完成后跳转 `/test-logs` |
 | POST | `/api/copy` | 请求体 `{"ids":[1,2,3]}`，返回原始订阅链接纯文本 |
 | POST | `/api/delete` | 请求体 `{"ids":[...]}`，删除指定节点 |
 | POST | `/api/purge-failed` | 清理所有被标记为失败的节点 |
 | GET | `/logs` | 操作日志（刷新/复制/删除/清理） |
-| GET | `/test-logs` | 测试批次历史（总计/可达/失败/自动删除/耗时） |
+| GET | `/test-logs` | 测试批次历史（总计/真实可达/失败/平均延迟/已测速/UDP 可用/耗时） |
 
 所有状态变更接口都是 **POST**，并且必须通过同源校验（见下）；无认证访问一律 `401`。
 
@@ -204,15 +242,74 @@ java -jar target/proxy-subscription-viewer-1.0.0.jar
 
 > ⚠️ 本应用能读取订阅中的全部节点（含 UUID，等同代理凭据）。若确需对外暴露，请自行在前面加 HTTPS 反向代理，并务必设置强口令。
 
-## 节点测试策略
+## 节点测试策略（真实可用性测试）
 
-- 明文 TCP 节点：DNS + TCP 连接 + **协议字节探针**（发一个 vless/vmess 版本字节，观察服务端是否立刻关闭），据此识别"端口开着但不是代理"的服务
-- TLS / WS 节点：按 SNI 握手后发送 HTTP 或 WebSocket 升级请求，依据 `HTTP/` 前缀或 `101 Switching Protocols` 判断；成功后再做限时下载测速
-- **失败不再删除节点**：只写入 `FAILED:原因` 标记并累加"连续失败次数"。一次断网、一次抖动都不会再清空数据库
+> **重构说明**：旧实现对节点服务器端口直接发 HTTP/WS 握手请求，只能证明"端口开着"，
+> 把大量已被阻断的节点判为可达。现在改为与 **v2rayN 的 Realping / Speedtest 同源**的做法：
+> **为每个节点生成真实内核配置、启动 Xray 内核，再经内核的本地 SOCKS 入站真实访问外网**。
+> 实测证据：同一份订阅里 120 个挤在同一地址的节点，TCP 可连但 TLS 立刻被重置——
+> 旧实现会把它们全部标为"可达"，新实现全部正确判为失败。
+>
+> 参考 v2rayN 源码的实现细节（含各测试类型的默认参数、内核生命周期做法、以及本项目刻意
+> 不照抄的几个点）见 [`docs/v2rayn-testing-reference.md`](docs/v2rayn-testing-reference.md)
+> 与 [`docs/v2rayn-speedtest-udptest-findings.md`](docs/v2rayn-speedtest-udptest-findings.md)。
+
+### 三个阶段
+
+| 阶段 | 做什么 | 为什么 |
+|------|--------|--------|
+| ① TCPing 预筛 | 纯 TCP 连接测时，遍历该域名解析出的**全部** IP 取最快者（v2rayN 只取第一个） | 不启动内核，成本极低；先剔除端口不通的节点，省掉为死节点起内核的开销 |
+| ② 真实延迟 | 为节点启动独立内核 → 经其 SOCKS 入站访问 `http://cp.cloudflare.com/generate_204`，**要求返回 204/200**；连测 2 次取最小值 | 这是"这个代理真的能不能用"的唯一可靠口径。节点被墙时常见 403/502，v2rayN 不校验状态码，本项目会判为失败 |
+| ③ 下载测速 | 仅对延迟通过的节点执行，限时 10 秒下载，速度 = 字节数 × 8 ÷ 耗时毫秒数（Kbps） | 延迟不通就不必浪费带宽 |
+
+UDP 可用性测试（`app.test.udp-test-enabled=true` 时启用）经 SOCKS5 UDP ASSOCIATE 发 NTP 探测包并**校验响应**，
+用于识别"TCP 通但 UDP 被阻断"的节点。
+
+### 关键实现要点（都是踩过的坑）
+
+- **内核就绪判定用真实 SOCKS5 握手**（`05 01 00` → 期望首字节 `0x05`），不是只探 TCP 端口：
+  端口可能恰被其它服务占用，只探 TCP 会得到"假就绪"。v2rayN 在测速路径上是盲等 1 秒。
+- **通信层自己实现 SOCKS5，不用 `java.net.http.HttpClient`**：JDK 的 HttpClient **不支持 SOCKS 代理**，
+  配置 `Proxy.Type.SOCKS`（无论 ProxySelector 还是 `socksProxyHost` 系统属性）都会被**静默忽略**，
+  请求退化成直连——那样任何节点都会"测通"。
+- **订阅抓取同样受这条限制**：`app.subscription.proxy-candidates` 里 `socks5://` 的候选交给自研
+  `Socks5HttpClient`（TLS + 手动跟随重定向 + 每跳 SSRF 复核，主机名 `remoteDns=true` 交代理侧解析），
+  只有 `http://` 代理候选与"直连"才用 `HttpClient`。历史上 SOCKS 候选是用 `HttpClient` 发的，
+  结果"🔄 更新节点"必然 connect timeout——请求其实在直连被墙的订阅域名。
+  抓取失败时页面与操作日志会列出**每个通道各自的失败原因**，便于判断是代理没开还是订阅地址错了。
+- **每节点独立内核**：节点之间互不干扰，单节点失败不影响整批；内核用完即关（`finally`），
+  临时配置写在系统临时目录并在关闭时删除。v2rayN 的 `configTest*.json` 是**从不清理**的。
+- **补齐了生成内核配置所需的参数**：`flow` / `pbk` / `sid` / `spx` / `serviceName` / `headerType` / `skipCertVerify`。
+  缺 `flow` 会让 Vision 节点必然握手失败而被误判为节点失效；缺 `pbk` 的 Reality 节点会直接报
+  `REALITY_MISSING_PUBLIC_KEY` 而不是让内核神秘失败。
+- **内核位置不缓存"未找到"**：配置或安装可能在运行期才补上，缓存失败结果会造成"配置已对却仍报找不到内核"。
+
+### 失败处理
+
+- **失败不删除节点**：只写入 `FAILED:原因` 标记并累加"连续失败次数"，单次网络抖动或断网不会清空数据库
 - 自动删除仅在显式配置 `app.test.auto-delete-after-failures=N`（N>0）且连续失败达到 N 次时发生
-- 需要清理失败节点时，在主页点击"🧹 清理失败节点"（或在 `/test-logs` 查看历史后清理）
+- 需要清理时在主页点击"🧹 清理失败节点"
 - 定时任务与手动测试互斥，不会并发重叠
-- 明文 TCP 节点无法测速，速度列显示 `N/A`，**不会再用 RTT 公式编造速度值**
+
+## 前置条件：准备代理内核
+
+节点测试需要本机的 **Xray 内核**。若你装过 v2rayN，它自带内核，直接指过去即可：
+
+```properties
+# src/main/resources/application-dev.properties
+app.test.core-dir=S:\installationFree\v2rayN-windows-64\bin
+```
+
+或用环境变量/启动参数指定可执行文件：
+
+```powershell
+$env:XRAY_PATH = "S:\installationFree\v2rayN-windows-64\bin\xray\xray.exe"
+```
+
+留空时会自动探测若干常见位置（PATH、`<盘>:\installationFree\v2rayN*\bin`、用户下载目录等）。
+
+> 未找到内核时，页面会显示明确的配置提示，且**不会**把节点误判为失败——测试按钮会被禁用。
+> 内核必须比 v2rayN 自带的更"新"程度无关紧要，本项目只用其 `run -c <config>` 能力。
 
 ## 解析与字段说明
 
@@ -224,18 +321,46 @@ java -jar target/proxy-subscription-viewer-1.0.0.jar
 
   因此 🏁 之类的非国旗 emoji 不会再被误判成国家，`AY`、`ZZ`、`HK01` 这类也不会误命中。
 
+## 数据库表结构
+
+三张表全部由 JPA 实体生成（`ddl-auto=update`），注释由 `db/schema-comments.sql` 补齐。
+
+| 表 | 对应实体 | 说明 |
+|------|----------|------|
+| `proxy_nodes` | `ProxyNode` | 节点明细，含测试结果字段；行由 `NodeReconciler` 按节点指纹做增量对账 |
+| `node_test_records` | `NodeTestRecord` | 每批次测试一行汇总，供 `/test-logs` 分页展示 |
+| `operation_logs` | `OperationLog` | 刷新/复制/删除/清理的操作审计，供 `/logs` 分页展示 |
+
+几个容易误读的字段：
+
+- `proxy_nodes.uuid_` — 列名带下划线是为了避开 `uuid` 关键字，实际是 VLESS 的 uuid / VMESS 的 id
+- `proxy_nodes.last_test_result` — `OK` 为**真实可用**，`FAILED:原因` 为失败，`NULL` 表示尚未测过；「清理失败节点」按 `FAILED:` 前缀筛选
+- `proxy_nodes.consecutive_failures` — 失败只累加本字段并打标记；仅当 `app.test.auto-delete-after-failures=N`（N>0）时才自动删除
+- `proxy_nodes.latency_ms` — **真实延迟**（经代理访问探测地址的往返耗时），不是 TCP 建连耗时；`-1` 表示未测或不可达
+- `proxy_nodes.speed_kbps` — 限时下载测速结果（Kbps）；`-1` 表示未测速（延迟未通过的节点不测速）
+- `proxy_nodes.flow` / `public_key` / `short_id` / `spider_x` / `service_name` / `header_type` — 生成内核配置所需的 VLESS/REALITY/gRPC 参数；缺失会导致对应节点被误判为失效
+- `node_test_records.avg_latency_ms` — 本批次可达节点的平均真实延迟；无可达节点时为 `-1`
+- `operation_logs.node_count` — 刷新记最终节点总数，复制/删除/清理记实际处理行数
+
 ## 测试
 
 ```powershell
 mvn test
 ```
 
-覆盖 40 个用例：
+覆盖 98 个用例：
 
-- `NodeParserTest` — VLESS（含 IPv6、缺省端口、参数解码）、VMESS、国旗/两字母码国家识别与历史误判回归
-- `NodeReconcilerTest` — 新增/更新/删除划分、主键与测试结果保留、订阅内与库内重复去重
+- `NodeParserTest` — VLESS（含 IPv6、缺省端口、`flow`/`pbk`/`sid`/`serviceName` 等新参数）、VMESS、国旗/两字母码国家识别与历史误判回归
+- `NodeReconcilerTest` — 新增/更新/删除划分、主键与测试结果保留、订阅内与库内重复去重、新增字段的可变拷贝
 - `SubscriptionPayloadTest` — 明文与三种 Base64 变体、chunked 解码容错
 - `SubscriptionUrlValidatorTest` — 公网/内网/保留地址、IPv4-mapped IPv6、非 http 协议、userinfo
+- `XrayCoreServiceTest` — 内核配置生成：VLESS/VMESS、TLS/REALITY、ws/grpc/xhttp、TCP 伪装头、参数不足时明确报错
+- `Socks5HttpClientTest` — 自研 SOCKS5 握手报文、HTTP 状态行/响应体解析、chunked 解码、远程 DNS 报文，以及**代理指向死端口时必须失败**（防止退回被静默忽略代理的 HttpClient）
+- `SubscriptionServiceSocks5Test` — 用本地假 SOCKS5 代理验证**订阅刷新确实穿过代理**：目标域名由代理侧解析、失败时逐通道给出原因（回归"点击刷新节点失败"）
+- `NodeTesterTest` — UDP 帧编解码、NTP 报文构造与响应校验、探测目标解析、失败原因归类
+- `CoreServiceIntegrationTest` — 真实起停 Xray 内核：定位、握手就绪、关闭后端口释放与临时配置清理
+- `CredentialMismatchDiagnosticTest` — 用只接受指定 UUID 的自建服务端验证：**凭据错误必须判为不可用**（若为可达即说明请求没走代理）
+- `RealProxyEndToEndTest` — 本机自建 Xray 服务端作为"节点"的闭环：真实测出延迟、不可达节点被正确标记、失败节点不被物理删除
 - `WebSmokeTest` — 401 认证、跨站 403、同源放行、三个模板渲染、`/refresh` 不接受 GET
 - `NodeSyncIntegrationTest` — 真实数据库下的增量刷新（id 与测速结果保持）与"失败只标记 + 手动清理"
 
@@ -261,8 +386,26 @@ A: 正常情况下不会。增量刷新会保留未变化节点的测速结果�
 **Q: 为什么删除 / 清理接口提示 403？**
 A: 触发了同源校验。这些接口必须从本页面发起（或由同源的脚本调用），跨站请求会被拒绝。
 
+**Q: 页面提示"未找到代理内核"？**
+A: 本机没有可用的 Xray 内核。若装过 v2rayN，把 `app.test.core-dir` 指向它的 `bin` 目录即可；
+否则用 `XRAY_PATH` 指向 `xray.exe`。未找到内核时测试按钮会被禁用——这是刻意的，
+避免把"测不了"误报成"节点全挂了"。
+
+**Q: 测试很慢（几百个节点要几分钟）？**
+A: 每个节点都要真实启动一次内核并访问外网，这是"真实测试"的固有成本（v2rayN 同理）。
+可调整：`app.test.tcping-pre-filter=true` 先剔除端口不通的节点；降低 `speed-concurrency` 以外的
+`latency-concurrency` 不会更快（过高的并发反而互相干扰）；不需要测速时设 `speed-test-enabled=false`。
+
+**Q: 为什么几乎所有节点都失败了？**
+A: 先用 TCPing 预筛看"TCP 可达"的数量：若预筛就大量失败，说明订阅里的地址本身已失效或被封。
+若 TCP 可达但真实延迟失败（原因多为 `RESET`），说明端口还开着但代理服务已被阻断——
+这正是旧实现会误判为"可达"的情形。本项目的判定是真实的。
+
 ## 已知限制
 
 - 单用户、无 HTTPS、无角色权限体系，仅适合个人在内网或加反代后使用
-- 节点测试是"端口/协议可用性 + 单次 HTTP 响应"级别的探测，不能等同于真实客户端的可用性
-- Reality / XTLS 等特殊协议按普通 TLS/TCP 对待，测试结果仅供参考
+- 只支持 VLESS 与 VMESS。订阅里的 trojan / hysteria / ss 等协议在解析阶段就被忽略
+- 真实延迟用 HTTP 探测点衡量，反映的是"经该节点访问探测点"的往返耗时；
+  与具体客户端在特定网络下的体验仍可能有差异
+- 测速是**单线程下载**的吞吐量，不测上传，也非多线程满速能力
+- 内核每个节点起停一次，节点数很多时整批耗时较长

@@ -10,6 +10,7 @@ import com.proxyviewer.model.ProxyNodeRepository;
 import com.proxyviewer.service.NodeSyncService;
 import com.proxyviewer.service.NodeTestService;
 import com.proxyviewer.service.SubscriptionService;
+import com.proxyviewer.service.test.XrayCoreService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,6 +50,7 @@ public class ProxyController {
     private final NodeTestService nodeTestService;
     private final NodeTestRecordRepository testRecordRepository;
     private final NodeSyncService nodeSyncService;
+    private final XrayCoreService coreService;
 
     public ProxyController(AppProperties props,
                            SubscriptionService subscriptionService,
@@ -56,7 +58,8 @@ public class ProxyController {
                            OperationLogRepository logRepository,
                            NodeTestService nodeTestService,
                            NodeTestRecordRepository testRecordRepository,
-                           NodeSyncService nodeSyncService) {
+                           NodeSyncService nodeSyncService,
+                           XrayCoreService coreService) {
         this.props = props;
         this.subscriptionService = subscriptionService;
         this.repository = repository;
@@ -64,6 +67,7 @@ public class ProxyController {
         this.nodeTestService = nodeTestService;
         this.testRecordRepository = testRecordRepository;
         this.nodeSyncService = nodeSyncService;
+        this.coreService = coreService;
     }
 
     @GetMapping("/")
@@ -198,16 +202,18 @@ public class ProxyController {
         return "logs";
     }
 
-    /** 手动触发节点连通性测试（POST，避免被预取/爬虫触发） */
+    /** 手动触发节点真实可用性测试（POST，避免被预取/爬虫触发） */
     @PostMapping("/test")
     public String runTest(RedirectAttributes attr) {
-        log.info("手动触发节点连通性测试");
+        log.info("手动触发节点真实可用性测试");
         try {
             NodeTestRecord record = nodeTestService.runTest("MANUAL");
             attr.addFlashAttribute("msg", String.format(
-                    "测试完成: 总计 %d, ✅可达 %d, ❌失败 %d, 自动删除 %d, 耗时 %dms",
+                    "真实测试完成: 总计 %d, ✅真实可达 %d, ❌失败 %d, 自动删除 %d, 耗时 %dms",
                     record.getTotalNodes(), record.getSuccessCount(),
                     record.getFailedCount(), record.getDeletedCount(), record.getDurationMs()));
+        } catch (IllegalStateException e) {
+            attr.addFlashAttribute("error", e.getMessage());
         } catch (Exception e) {
             log.error("手动测试失败", e);
             attr.addFlashAttribute("error", "测试失败: " + e.getMessage());
@@ -226,9 +232,22 @@ public class ProxyController {
         model.addAttribute("totalCount", testPage.getTotalElements());
         model.addAttribute("currentPage", page);
         model.addAttribute("totalPages", testPage.getTotalPages());
-        model.addAttribute("testRunning", nodeTestService.isRunning());
-        model.addAttribute("autoDeleteAfterFailures", props.getTest().getAutoDeleteAfterFailures());
+        addTestStatus(model);
         return "test-logs";
+    }
+
+    /** 测试运行状态 / 进度 / 内核可用性，供两个页面复用 */
+    private void addTestStatus(Model model) {
+        model.addAttribute("testRunning", nodeTestService.isRunning());
+        model.addAttribute("testDone", nodeTestService.getDoneCount());
+        model.addAttribute("testTotal", nodeTestService.getTotalCount());
+        model.addAttribute("testPhase", nodeTestService.getPhase());
+        model.addAttribute("autoDeleteAfterFailures", props.getTest().getAutoDeleteAfterFailures());
+        model.addAttribute("coreAvailable", coreService.isCoreAvailable());
+        model.addAttribute("corePath", coreService.getCorePath());
+        model.addAttribute("latencyTestUrl", props.getTest().getLatencyTestUrl());
+        model.addAttribute("udpTestEnabled", props.getTest().isUdpTestEnabled());
+        model.addAttribute("udpTestTarget", props.getTest().getUdpTestTarget());
     }
 
     // ======================== 内部方法 ========================
@@ -268,12 +287,17 @@ public class ProxyController {
         }
 
         Sort sortObj = Sort.by(Sort.Direction.ASC, "id");
-        if ("latencyMs".equals(sort)) {
+        boolean byLatency = "latencyMs".equals(sort);
+        if (byLatency) {
+            // -1 是"未测/不可达"的哨兵值，数值上最小。
+            // 直接按数值排序会把失败节点顶到最前面，这里用 CASE 让有效延迟优先。
             sortObj = Sort.by("asc".equals(order) ? Sort.Direction.ASC : Sort.Direction.DESC, "latencyMs")
                     .and(Sort.by(Sort.Direction.ASC, "id"));
         }
         Pageable pageable = PageRequest.of(pageIndex, size, sortObj);
-        Page<ProxyNode> pageResult = filterByCountry(country, pageable);
+        Page<ProxyNode> pageResult = byLatency
+                ? repository.findByLatencyOrder(blankToNull(country), "asc".equals(order), pageable)
+                : filterByCountry(country, pageable);
 
         String defaultUrl = props.getSubscription().getDefaultUrl();
         model.addAttribute("nodes", pageResult.getContent());
@@ -303,7 +327,7 @@ public class ProxyController {
         model.addAttribute("failedCount", filtered
                 ? repository.countByCountryNameAndLastTestResultStartingWith(country, NodeSyncService.FAILED_PREFIX)
                 : repository.countByLastTestResultStartingWith(NodeSyncService.FAILED_PREFIX));
-        model.addAttribute("testRunning", nodeTestService.isRunning());
+        addTestStatus(model);
 
         // 最近一条刷新日志的时间
         logRepository.findTop50ByOrderByCreatedAtDesc().stream()
@@ -319,5 +343,10 @@ public class ProxyController {
             return repository.findByCountryName(country, pageable);
         }
         return repository.findAll(pageable);
+    }
+
+    /** 空串与 null 等价：原生查询里用 {@code IS NULL} 判断"不筛选国家" */
+    private static String blankToNull(String value) {
+        return (value == null || value.isBlank()) ? null : value;
     }
 }

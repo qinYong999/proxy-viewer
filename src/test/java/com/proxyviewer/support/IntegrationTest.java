@@ -27,7 +27,14 @@ import java.lang.annotation.Target;
         "app.security.password=secret",
         // 显式清空订阅链接，避免开发机上的 SUBSCRIPTION_URL 环境变量让测试真的去联网抓订阅
         "app.subscription.default-url=",
-        "app.test.schedule-enabled=false"
+        "app.test.schedule-enabled=false",
+        // 显式清空内核位置与联网配置，避免测试受开发机环境影响：
+        // 内核不可用时只影响"真实测试"这一条路径，页面会走「未测」分支。
+        "app.test.core-path=",
+        "app.test.core-dir=",
+        "app.test.core-asset-dir=",
+        "app.test.udp-test-enabled=false",
+        "app.test.speed-test-enabled=false"
 })
 @AutoConfigureMockMvc
 public @interface IntegrationTest {

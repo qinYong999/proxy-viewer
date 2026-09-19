@@ -1,0 +1,12 @@
+# 使用 subclass mock maker，而不是 Mockito 默认的 inline mock maker。
+#
+# 原因：inline mock maker 需要在运行时向当前 JVM 动态挂载 Java agent，
+# 而 JDK 21 起（JEP 451）默认禁止这种行为，在 JDK 24/25 上会直接失败：
+#   "Could not initialize inline Byte Buddy mock maker.
+#    It appears as if your JDK does not supply a working agent attachment mechanism."
+# 该失败会让所有 Spring 集成测试在 MockReset 监听器初始化 Mockito 时全部报错。
+#
+# subclass mock maker 基于子类代理，不需要挂载 agent，因此在任何 JDK 上都能工作。
+# 代价是不能 mock final 类 / static 方法 / 构造器——本项目的测试没有用到这些能力。
+# 将来若确实需要 mock final 类型，应改为把 mockito 作为 -javaagent 传入测试 JVM。
+mock-maker-subclass

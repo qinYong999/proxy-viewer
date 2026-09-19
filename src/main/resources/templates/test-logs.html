@@ -72,9 +72,11 @@
 <body>
 <div class="container">
     <div class="header">
-        <h1>🔍 节点连通性测试</h1>
+        <h1>🔍 节点真实可用性测试</h1>
         <div class="subtitle">
-            TLS+HTTP 连通性测试，定时自动执行。测试失败只标记、不删除节点<span
+            为每个节点启动真实代理内核（Xray），经它的本地 SOCKS 入站访问
+            <code th:text="${latencyTestUrl}">探测地址</code>
+            来实测延迟，而不是只探服务器端口。测试失败只标记、不删除节点<span
                 th:if="${autoDeleteAfterFailures > 0}"
                 th:text="'，仅在连续失败 ' + ${autoDeleteAfterFailures} + ' 次后自动删除'">，仅在连续失败 N 次后自动删除</span>。
         </div>
@@ -83,12 +85,32 @@
     <div class="msg-banner" th:if="${msg != null}" th:text="${msg}">消息</div>
     <div class="error-banner" th:if="${error != null}" th:text="${error}">错误</div>
 
+    <!-- 内核不可用时，节点会被判为「未测」而不是「失败」，这里给明确指引 -->
+    <div class="error-banner" th:if="${!coreAvailable}" style="margin-bottom:12px;">
+        ⚠️ <b>未找到代理内核（Xray）</b>，测试无法进行。请把
+        <code>app.test.core-path</code> 指向内核可执行文件，或用
+        <code>app.test.core-dir</code> 指向内核所在目录（v2rayN 便携版通常是
+        <code>…\v2rayN-windows-64\bin</code>）。
+    </div>
+
+    <!-- 测试进行中的实时进度 -->
+    <div class="msg-banner" th:if="${testRunning}">
+        ⏳ 正在测试：<b th:text="${testPhase}">阶段</b>
+        <span th:if="${testTotal > 0}"
+              th:text="'（' + ${testDone} + ' / ' + ${testTotal} + '）'">(0/0)</span>
+        <span style="font-size:12px; color:#636e72;">
+            &nbsp;每节点需启动一次内核，整批耗时较长，此页会自动刷新
+        </span>
+    </div>
+
     <div class="nav-bar">
         <a href="/">← 节点列表</a>
         <a href="/logs">📋 操作日志</a>
         <span class="spacer"></span>
+        <span th:if="${coreAvailable}" style="font-size:12px; color:#00b894; margin-right:10px;"
+              th:title="${corePath}">✅ 内核已就绪</span>
         <form method="post" action="/test" style="display:inline; margin:0;">
-            <button type="submit" class="btn-test" th:disabled="${testRunning}"
+            <button type="submit" class="btn-test" th:disabled="${testRunning or !coreAvailable}"
                     th:text="${testRunning} ? '⏳ 测试进行中…' : '🚀 手动测试'">🚀 手动测试</button>
         </form>
     </div>
@@ -97,14 +119,17 @@
         <table th:if="${totalCount > 0}">
             <thead>
             <tr>
-                <th style="width:60px;">#</th>
+                <th style="width:50px;">#</th>
                 <th style="width:90px;">测试时间</th>
                 <th style="width:80px;">触发方式</th>
-                <th style="width:60px;">总计</th>
+                <th style="width:55px;">总计</th>
                 <th style="width:60px;">✅ 可达</th>
-                <th style="width:60px;">❌ 失败</th>
-                <th style="width:70px;">🗑 自动删除</th>
-                <th style="width:90px;">耗时</th>
+                <th style="width:55px;">❌ 失败</th>
+                <th style="width:75px;">平均延迟</th>
+                <th style="width:60px;">⚡ 已测速</th>
+                <th style="width:65px;">UDP 可用</th>
+                <th style="width:65px;">🗑 自动删除</th>
+                <th style="width:80px;">耗时</th>
             </tr>
             </thead>
             <tbody>
@@ -118,6 +143,10 @@
                 <td th:text="${t.totalNodes}">0</td>
                 <td style="color:#00b894; font-weight:700;" th:text="${t.successCount}">0</td>
                 <td style="color:#d63031;" th:text="${t.failedCount}">0</td>
+                <td th:if="${t.avgLatencyMs >= 0}" th:text="${t.avgLatencyMs + ' ms'}" style="font-weight:600;">0 ms</td>
+                <td th:if="${t.avgLatencyMs < 0}" style="color:#b2bec3;">—</td>
+                <td th:text="${t.speedTestCount}">0</td>
+                <td th:text="${t.udpSuccessCount}">0</td>
                 <td style="color:#636e72;" th:text="${t.deletedCount}">0</td>
                 <td class="time" th:text="${t.durationMs + ' ms'}">0ms</td>
             </tr>
@@ -144,5 +173,10 @@
         <span class="info"><span th:text="${currentPage}">1</span>/<span th:text="${totalPages}">1</span>页 · <span th:text="${totalCount}">0</span>条</span>
     </div>
 </div>
+
+<script th:if="${testRunning}">
+    // 测试期间自动刷新，让进度推进（整批测试可能持续数分钟）
+    setTimeout(function () { location.reload(); }, 3000);
+</script>
 </body>
 </html>
