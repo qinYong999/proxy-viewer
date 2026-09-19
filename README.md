@@ -220,7 +220,9 @@ java -jar target/proxy-subscription-viewer-1.0.0.jar
 |------|------|------|
 | GET | `/` | 主页：节点分页、国家筛选、延迟排序、统计；含「🚀 测试真实可用性」按钮与实时进度 |
 | POST | `/refresh` | 抓取订阅并增量入库（PRG 重定向回首页） |
-| POST | `/test` | 手动触发**真实可用性测试**，完成后跳转 `/test-logs` |
+| POST | `/test` | 触发**真实可用性测试**：立即返回，测试转后台执行（无 JS 时的兜底入口） |
+| POST | `/api/test/start` | 页内按钮入口：开始测试并立即返回当前进度（已有测试在跑时返回 `409`） |
+| GET | `/api/test/status` | 测试进度：`running`/`phase`/`done`/`total`/`elapsedMs`/`message`/`events` |
 | POST | `/api/copy` | 请求体 `{"ids":[1,2,3]}`，返回原始订阅链接纯文本 |
 | POST | `/api/delete` | 请求体 `{"ids":[...]}`，删除指定节点 |
 | POST | `/api/purge-failed` | 清理所有被标记为失败的节点 |
@@ -283,6 +285,21 @@ UDP 可用性测试（`app.test.udp-test-enabled=true` 时启用）经 SOCKS5 UD
   缺 `flow` 会让 Vision 节点必然握手失败而被误判为节点失效；缺 `pbk` 的 Reality 节点会直接报
   `REALITY_MISSING_PUBLIC_KEY` 而不是让内核神秘失败。
 - **内核位置不缓存"未找到"**：配置或安装可能在运行期才补上，缓存失败结果会造成"配置已对却仍报找不到内核"。
+
+### 进度反馈
+
+整批测试要跑几十秒到几分钟，因此**点击后立即返回、测试在后台执行**，前端每秒轮询
+`/api/test/status` 展示：当前阶段、已完成/总数（带进度条）、已用时，以及最近处理过的
+节点流水（`✓ 节点 220ms` / `✗ 节点 RESET`）。
+
+早期实现让 HTTP 请求同步等待整批跑完，页面在整段时间内毫无反馈，看起来像卡死了。
+几处刻意的设计：
+
+- **进度总量会随阶段收敛**：TCPing 预筛阶段是全部节点，进入真实延迟测试后总量改为
+  「TCP 可达的节点数」，否则进度条永远到不了 100%
+- **阶段切换写进同一份快照**，避免前端多次读取时看到互相矛盾的状态
+- **测试进行中可以离开或刷新页面**，重新进入会自动接管显示进度
+- 内核启动失败时只提取日志里的错误行（不把版本横幅整段塞进页面）
 
 ### 失败处理
 
@@ -348,19 +365,21 @@ $env:XRAY_PATH = "S:\installationFree\v2rayN-windows-64\bin\xray\xray.exe"
 mvn test
 ```
 
-覆盖 98 个用例：
+覆盖 122 个用例：
 
 - `NodeParserTest` — VLESS（含 IPv6、缺省端口、`flow`/`pbk`/`sid`/`serviceName` 等新参数）、VMESS、国旗/两字母码国家识别与历史误判回归
 - `NodeReconcilerTest` — 新增/更新/删除划分、主键与测试结果保留、订阅内与库内重复去重、新增字段的可变拷贝
 - `SubscriptionPayloadTest` — 明文与三种 Base64 变体、chunked 解码容错
 - `SubscriptionUrlValidatorTest` — 公网/内网/保留地址、IPv4-mapped IPv6、非 http 协议、userinfo
 - `XrayCoreServiceTest` — 内核配置生成：VLESS/VMESS、TLS/REALITY、ws/grpc/xhttp、TCP 伪装头、参数不足时明确报错
+- `CoreErrorExtractionTest` — 内核启动失败时从日志提取错误行（而不是把版本横幅整段塞进页面）
 - `Socks5HttpClientTest` — 自研 SOCKS5 握手报文、HTTP 状态行/响应体解析、chunked 解码、远程 DNS 报文，以及**代理指向死端口时必须失败**（防止退回被静默忽略代理的 HttpClient）
 - `SubscriptionServiceSocks5Test` — 用本地假 SOCKS5 代理验证**订阅刷新确实穿过代理**：目标域名由代理侧解析、失败时逐通道给出原因（回归"点击刷新节点失败"）
 - `NodeTesterTest` — UDP 帧编解码、NTP 报文构造与响应校验、探测目标解析、失败原因归类
 - `CoreServiceIntegrationTest` — 真实起停 Xray 内核：定位、握手就绪、关闭后端口释放与临时配置清理
 - `CredentialMismatchDiagnosticTest` — 用只接受指定 UUID 的自建服务端验证：**凭据错误必须判为不可用**（若为可达即说明请求没走代理）
 - `RealProxyEndToEndTest` — 本机自建 Xray 服务端作为"节点"的闭环：真实测出延迟、不可达节点被正确标记、失败节点不被物理删除
+- `NodeTestProgressTest` — 测试触发立即返回（不阻塞页面）、进度可观察、结束后状态复位、重复触发被拒
 - `WebSmokeTest` — 401 认证、跨站 403、同源放行、三个模板渲染、`/refresh` 不接受 GET
 - `NodeSyncIntegrationTest` — 真实数据库下的增量刷新（id 与测速结果保持）与"失败只标记 + 手动清理"
 

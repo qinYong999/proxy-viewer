@@ -16,7 +16,9 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.time.LocalDateTime;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -59,6 +61,12 @@ public class NodeTestService {
     private final AtomicInteger doneCount = new AtomicInteger();
     private volatile int totalCount = 0;
     private volatile String phase = "";
+    private volatile long startTimeMs = 0;
+    private volatile long lastEndTimeMs = 0;
+    private volatile String lastMessage = "";
+    /** 最近处理的节点事件（供页面实时滚动显示），容量固定 */
+    private final Deque<String> recentEvents = new ArrayDeque<>();
+    private static final int MAX_EVENTS = 12;
 
     private final ExecutorService executor;
 
@@ -97,6 +105,21 @@ public class NodeTestService {
                                String reason) {
     }
 
+    /**
+     * 测试进度快照。
+     *
+     * @param running   是否正在执行
+     * @param phase     当前阶段中文描述
+     * @param done      已完成节点数
+     * @param total     总节点数
+     * @param elapsedMs 已耗时（毫秒）；未开始时为 0
+     * @param message   完成/失败时的一句话结论
+     * @param events    最近处理的节点（新的在前）
+     */
+    public record ProgressSnapshot(boolean running, String phase, int done, int total,
+                                   long elapsedMs, String message, List<String> events) {
+    }
+
     public boolean isRunning() {
         return running.get();
     }
@@ -114,15 +137,125 @@ public class NodeTestService {
         return phase;
     }
 
+    /** 最近一次测试的结论（完成后保留，供页面在刷新后仍能显示） */
+    public String getLastMessage() {
+        return lastMessage;
+    }
+
+    /** 最近一次测试是否已产出结论 */
+    public boolean hasFinishedOnce() {
+        return lastEndTimeMs > 0;
+    }
+
+    /** 供前端轮询：一次性取走全部进度信息，避免多次读取时状态不一致 */
+    public ProgressSnapshot snapshot() {
+        boolean isRunning = running.get();
+        long elapsed = 0;
+        if (isRunning && startTimeMs > 0) {
+            elapsed = System.currentTimeMillis() - startTimeMs;
+        } else if (!isRunning && startTimeMs > 0 && lastEndTimeMs >= startTimeMs) {
+            elapsed = lastEndTimeMs - startTimeMs;
+        }
+        List<String> events;
+        synchronized (recentEvents) {
+            events = new ArrayList<>(recentEvents);
+        }
+        return new ProgressSnapshot(isRunning, phase, doneCount.get(), totalCount,
+                elapsed, lastMessage, events);
+    }
+
+    /** 记录一条节点处理事件，供页面实时滚动显示（过长会挤掉信息，这里限长） */
+    private void recordEvent(String event) {
+        if (event == null) {
+            return;
+        }
+        String text = event.replaceAll("\\s+", " ").trim();
+        final int maxEvent = 96;
+        if (text.length() > maxEvent) {
+            text = text.substring(0, maxEvent) + "…";
+        }
+        synchronized (recentEvents) {
+            recentEvents.addFirst(text);
+            while (recentEvents.size() > MAX_EVENTS) {
+                recentEvents.removeLast();
+            }
+        }
+    }
+
+    private void clearEvents() {
+        synchronized (recentEvents) {
+            recentEvents.clear();
+        }
+    }
+
+    /**
+     * 立即返回并在后台线程执行测试。
+     *
+     * <p>整批测试耗时可达数分钟（每节点都要真实启动一次内核），若让 HTTP 请求同步等待，
+     * 页面在整段时间内毫无反馈——用户无从判断是卡死还是在跑。这里改为提交后台执行，
+     * 前端轮询 {@link #snapshot()} 展示进度。</p>
+     *
+     * @throws IllegalStateException 已有测试在执行
+     */
+    public void startTestRun(String triggerType) {
+        if (!running.compareAndSet(false, true)) {
+            throw new IllegalStateException("已有测试任务正在执行，请等待其完成后再试");
+        }
+        startTimeMs = System.currentTimeMillis();
+        lastEndTimeMs = 0;
+        lastMessage = "";
+        doneCount.set(0);
+        totalCount = 0;
+        phase = "准备中";
+        clearEvents();
+        log.info("收到测试请求 [{}]，已转入后台执行", triggerType);
+
+        executor.submit(() -> {
+            try {
+                NodeTestRecord record = doRunTest(triggerType);
+                lastMessage = finishMessage(record);
+            } catch (Exception e) {
+                lastMessage = "测试失败: " + XrayCoreService.shortMessage(e);
+                log.error("后台测试执行失败", e);
+            } finally {
+                lastEndTimeMs = System.currentTimeMillis();
+                phase = "";
+                running.set(false);
+            }
+        });
+    }
+
+    /** 统一的完成结论文案，异步与同步路径共用 */
+    static String finishMessage(NodeTestRecord record) {
+        if (record.getTotalNodes() == 0) {
+            return "没有可测试的节点，请先刷新订阅";
+        }
+        return String.format("测试完成：总计 %d，真实可达 %d，失败 %d",
+                record.getTotalNodes(), record.getSuccessCount(), record.getFailedCount());
+    }
+
+    /** 同步执行测试（供定时任务与测试代码调用） */
     public NodeTestRecord runTest(String triggerType) {
         if (!running.compareAndSet(false, true)) {
             throw new IllegalStateException("已有测试任务正在执行，请等待其完成后再试");
         }
+        startTimeMs = System.currentTimeMillis();
+        lastEndTimeMs = 0;
+        lastMessage = "";
+        doneCount.set(0);
+        totalCount = 0;
+        clearEvents();
         try {
-            return doRunTest(triggerType);
+            NodeTestRecord record = doRunTest(triggerType);
+            lastMessage = finishMessage(record);
+            return record;
+        } catch (Exception e) {
+            lastMessage = "测试失败: " + XrayCoreService.shortMessage(e);
+            throw e;
         } finally {
-            running.set(false);
+            lastEndTimeMs = System.currentTimeMillis();
             phase = "";
+            running.set(false);
         }
     }
 
@@ -146,6 +279,12 @@ public class NodeTestService {
 
         totalCount = allNodes.size();
         doneCount.set(0);
+        if (allNodes.isEmpty()) {
+            // 空库：直接给出结论（由调用方经 finishMessage 统一呈现），
+            // 避免"进度条永远停在 0%"的困惑
+            log.info("库中没有节点，本次测试直接结束");
+            return new NodeTestRecord(LocalDateTime.now(), 0, triggerType);
+        }
 
         // ---------- 阶段 1：TCPing 预筛（不启动内核，成本极低） ----------
         List<TestOutcome> outcomes;
@@ -263,6 +402,8 @@ public class NodeTestService {
                 futures.add(CompletableFuture.supplyAsync(() -> {
                     long ms = tcping(node, cfg.getTcpingTimeoutMs());
                     doneCount.incrementAndGet();
+                    recordEvent((ms >= 0 ? "✓ " : "✗ ") + displayName(node)
+                            + (ms >= 0 ? " TCP " + ms + "ms" : " TCP 不通"));
                     return ms >= 0
                             ? new TestOutcome(node, true, ms, NOT_MEASURED, false, NOT_MEASURED, null)
                             : new TestOutcome(node, false, NOT_MEASURED, NOT_MEASURED, false,
@@ -330,6 +471,11 @@ public class NodeTestService {
         }
 
         int concurrency = Math.max(1, Math.min(cfg.getLatencyConcurrency(), Math.max(1, candidates.size())));
+        // 只测 TCP 可达的节点：进度总量随之收敛，否则进度条永远到不了 100%
+        totalCount = candidates.size();
+        doneCount.set(0);
+        log.info("开始真实延迟测试: {} 个候选节点（TCPing 预筛已排除 {} 个）",
+                candidates.size(), skipped.size());
         AtomicInteger portSeq = new AtomicInteger();
         List<CompletableFuture<TestOutcome>> futures = new ArrayList<>(candidates.size());
         for (ProxyNode node : candidates) {
@@ -368,6 +514,7 @@ public class NodeTestService {
      */
     private TestOutcome testNodeReal(ProxyNode node, int socksPort, AppProperties.Test cfg) {
         if (!core.isCoreAvailable()) {
+            recordEvent("✗ " + displayName(node) + " 未找到代理内核");
             return new TestOutcome(node, false, NOT_MEASURED, NOT_MEASURED, false, NOT_MEASURED,
                     "NO_CORE");
         }
@@ -375,13 +522,16 @@ public class NodeTestService {
         try {
             process = core.start(node, socksPort);
             if (process == null) {
+                String why = core.getLastFailure();
+                recordEvent("✗ " + displayName(node) + " " + shortenReason(why));
                 return new TestOutcome(node, false, NOT_MEASURED, NOT_MEASURED, false, NOT_MEASURED,
-                        core.getLastFailure());
+                        why);
             }
 
             NodeTester.ProbeResult latency = tester.measureLatency(node, socksPort);
             if (!latency.ok()) {
                 log.info("  #{} {} ❌ 真实延迟失败: {}", node.getId(), node.getName(), latency.reason());
+                recordEvent("✗ " + displayName(node) + " " + shortenReason(latency.reason()));
                 return new TestOutcome(node, false, NOT_MEASURED, NOT_MEASURED, false, NOT_MEASURED,
                         latency.reason());
             }
@@ -396,9 +546,12 @@ public class NodeTestService {
 
             log.info("  #{} {} ✅ 真实延迟 {}ms{}", node.getId(), node.getName(), latency.value(),
                     cfg.isUdpTestEnabled() ? (" | UDP " + (udpOk ? udpMs + "ms" : "不可用")) : "");
+            recordEvent("✓ " + displayName(node) + " " + latency.value() + "ms"
+                    + (cfg.isUdpTestEnabled() ? (udpOk ? " / UDP " + udpMs + "ms" : " / UDP 不可用") : ""));
             return new TestOutcome(node, true, latency.value(), NOT_MEASURED, udpOk, udpMs, null);
         } catch (Exception e) {
             log.warn("  #{} {} 测试异常: {}", node.getId(), node.getName(), e.getMessage());
+            recordEvent("✗ " + displayName(node) + " " + shortenReason(NodeTester.classify(e)));
             return new TestOutcome(node, false, NOT_MEASURED, NOT_MEASURED, false, NOT_MEASURED,
                     NodeTester.classify(e));
         } finally {
@@ -419,6 +572,10 @@ public class NodeTestService {
         int concurrency = Math.max(1, Math.min(cfg.getSpeedConcurrency(), reachable.size()));
         log.info("开始测速 {} 个可达节点（并发内核 {}，限时 {}ms）",
                 reachable.size(), concurrency, cfg.getSpeedTestDurationMs());
+        // 测速只针对可达节点：重置进度基准，避免进度条停在延迟阶段的总数上不动
+        totalCount = reachable.size();
+        doneCount.set(0);
+        recordEvent("开始测速 " + reachable.size() + " 个可达节点");
 
         ExecutorService speedPool = Executors.newFixedThreadPool(concurrency, runnable -> {
             Thread t = new Thread(runnable, "node-speed-" + threadSeq.incrementAndGet());
@@ -436,21 +593,27 @@ public class NodeTestService {
                     try {
                         process = core.start(node, port);
                         if (process == null) {
+                            recordEvent("✗ " + displayName(node) + " 测速时内核启动失败");
                             return outcome;
                         }
                         NodeTester.ProbeResult speed = tester.measureSpeed(node, port);
                         if (speed.ok()) {
                             log.info("  #{} {} ⚡ {} Kbps ({} MB/s)", node.getId(), node.getName(),
                                     speed.value(), String.format("%.2f", speed.value() / 8000.0));
+                            recordEvent("⚡ " + displayName(node) + " "
+                                    + String.format("%.2f", speed.value() / 8000.0) + " MB/s");
                             return new TestOutcome(node, true, outcome.latencyMs(), speed.value(),
                                     outcome.udpOk(), outcome.udpMs(), null);
                         }
                         log.info("  #{} {} 测速失败: {}", node.getId(), node.getName(), speed.reason());
+                        recordEvent("✗ " + displayName(node) + " 测速失败 " + speed.reason());
                         return outcome;
                     } catch (Exception e) {
                         log.debug("  #{} 测速异常: {}", node.getId(), e.getMessage());
+                        recordEvent("✗ " + displayName(node) + " 测速异常");
                         return outcome;
                     } finally {
+                        doneCount.incrementAndGet();
                         if (process != null) {
                             process.close();
                         }
@@ -488,6 +651,16 @@ public class NodeTestService {
         }
         String cleaned = reason.replaceAll("\\s+", " ").trim();
         return cleaned.length() <= maxReason ? cleaned : cleaned.substring(0, maxReason);
+    }
+
+    /** 进度事件里显示的节点名，过长会挤掉其它信息，这里截断 */
+    static String displayName(ProxyNode node) {
+        String name = node == null ? null : node.getName();
+        if (name == null || name.isBlank()) {
+            return node == null ? "?" : ("#" + node.getId());
+        }
+        String trimmed = name.trim();
+        return trimmed.length() <= 24 ? trimmed : trimmed.substring(0, 24) + "…";
     }
 
     /** 分配本地 SOCKS 端口，避开 v2rayN 常用的 108xx 段 */

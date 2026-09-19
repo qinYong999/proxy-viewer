@@ -97,6 +97,63 @@
             text-decoration: none; transition: all 0.2s;
         }
         .toolbar .btn-outline:hover { background: #f0edff; }
+        .toolbar .btn-test-inline {
+            background: #6c5ce7; color: #fff; border: none;
+            padding: 5px 14px; border-radius: 6px; font-size: 13px;
+            cursor: pointer; transition: all 0.2s;
+        }
+        .toolbar .btn-test-inline:hover:not(:disabled) { background: #5b4bd6; }
+        .toolbar .btn-test-inline:disabled {
+            background: #b2bec3; cursor: not-allowed;
+        }
+
+        /* ---------- 测试进度面板 ---------- */
+        .test-progress {
+            background: #fff; border-radius: 10px; padding: 14px 18px;
+            margin-bottom: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+            border-left: 4px solid #6c5ce7;
+        }
+        .test-progress.done { border-left-color: #00b894; }
+        .test-progress.failed { border-left-color: #d63031; }
+        .test-progress .tp-head {
+            display: flex; align-items: baseline; justify-content: space-between;
+            gap: 12px; margin-bottom: 10px; flex-wrap: wrap;
+        }
+        .test-progress .tp-title { font-size: 15px; font-weight: 700; color: #2d3436; }
+        .test-progress .tp-meta { font-size: 12px; color: #636e72; }
+        .test-progress .tp-track {
+            height: 10px; background: #eef0f3; border-radius: 6px; overflow: hidden;
+        }
+        .test-progress .tp-fill {
+            height: 100%; width: 0; border-radius: 6px;
+            background: linear-gradient(90deg, #6c5ce7, #a29bfe);
+            transition: width 0.4s ease;
+        }
+        .test-progress .tp-fill.indeterminate {
+            width: 35% !important;
+            animation: tp-slide 1.2s ease-in-out infinite;
+        }
+        @keyframes tp-slide {
+            0%   { margin-left: 0; }
+            50%  { margin-left: 65%; }
+            100% { margin-left: 0; }
+        }
+        .test-progress .tp-counts {
+            font-size: 12px; color: #636e72; margin-top: 8px;
+        }
+        .test-progress .tp-events {
+            list-style: none; margin: 10px 0 0; padding: 0;
+            max-height: 168px; overflow-y: auto;
+            font-size: 12px; font-family: Consolas, "Courier New", monospace;
+            border-top: 1px dashed #eef0f3; padding-top: 8px;
+        }
+        .test-progress .tp-events li {
+            padding: 2px 0; color: #636e72; white-space: nowrap;
+            overflow: hidden; text-overflow: ellipsis;
+        }
+        .test-progress .tp-events li.ok  { color: #00b894; }
+        .test-progress .tp-events li.bad { color: #d63031; }
+        .test-progress .tp-events li.speed { color: #0984e3; font-weight: 600; }
 
         /* Selection bar (always visible, no bounce) */
         .sel-bar {
@@ -226,11 +283,17 @@
         <code>…\v2rayN-windows-64\bin</code>）。
     </div>
 
-    <!-- 测试进度：测试在服务端同步执行，页面按秒轮询进度 -->
-    <div class="msg-banner" th:if="${testRunning}" id="testProgress">
-        ⏳ 正在测试：<b th:text="${testPhase}">阶段</b>
-        <span th:if="${testTotal > 0}"
-              th:text="'（' + ${testDone} + ' / ' + ${testTotal} + '）'">(0/0)</span>
+    <!-- 测试进度面板：点击按钮后立即出现，随后按秒轮询 /api/test/status 更新 -->
+    <div class="test-progress" id="testProgress" th:attr="data-running=${testRunning}" style="display:none;">
+        <div class="tp-head">
+            <span class="tp-title" id="tpPhase">准备中…</span>
+            <span class="tp-meta" id="tpMeta"></span>
+        </div>
+        <div class="tp-track">
+            <div class="tp-fill" id="tpFill"></div>
+        </div>
+        <div class="tp-counts" id="tpCounts">正在启动测试…</div>
+        <ul class="tp-events" id="tpEvents"></ul>
     </div>
 
     <!-- 消息/错误 -->
@@ -271,14 +334,14 @@
         <a href="/logs" class="btn-outline" style="font-size:12px; padding:4px 10px;">📋 日志</a>
         <a href="/test-logs" class="btn-outline" style="font-size:12px; padding:4px 10px;">🔍 测速</a>
 
-        <!-- 测试直接在本页发起：测试期间页面会自动轮询进度 -->
-        <form method="post" action="/test" style="display:inline; margin:0;">
-            <button type="submit" class="btn-outline"
-                    style="font-size:12px; padding:4px 10px;"
-                    th:disabled="${testRunning or !coreAvailable}"
-                    th:title="${coreAvailable} ? '为每个节点启动真实内核，经代理访问外网测延迟' : '未找到代理内核，无法测试'"
-                    th:text="${testRunning} ? '⏳ 测试中…' : '🚀 测试真实可用性'">🚀 测试真实可用性</button>
-        </form>
+        <!-- 测试在本页发起：点击后立即出现进度面板，无需等待整批跑完 -->
+        <button type="button" id="testBtn" class="btn-test-inline"
+                onclick="startNodeTest()"
+                th:disabled="${!coreAvailable}"
+                th:attr="data-running=${testRunning}"
+                th:title="${coreAvailable} ? '为每个节点启动真实内核，经代理访问外网测延迟' : '未找到代理内核，无法测试'"
+                th:text="${testRunning} ? '⏳ 测试中…' : '🚀 测试真实可用性'">🚀 测试真实可用性</button>
+        <a href="/test-logs" class="btn-outline" style="font-size:12px; padding:4px 10px;">📊 测试历史</a>
 
         <span style="flex:1;"></span>
 
@@ -734,6 +797,116 @@
         }
     }
 
+    // ========== 测试触发与实时进度 ==========
+    // 点击后立即显示进度面板并轮询服务端进度：整批测试要跑几分钟，
+    // 早期实现让请求同步等待，页面在此期间完全没反应。
+    var testTimer = null;
+
+    function tpEl(id) { return document.getElementById(id); }
+
+    function formatDuration(ms) {
+        var total = Math.max(0, Math.round(ms / 1000));
+        var m = Math.floor(total / 60);
+        var s = total % 60;
+        return m > 0 ? (m + ' 分 ' + s + ' 秒') : (s + ' 秒');
+    }
+
+    function renderProgress(data) {
+        var panel = tpEl('testProgress');
+        if (!panel) return;
+        panel.style.display = 'block';
+
+        var phase = tpEl('tpPhase');
+        var meta = tpEl('tpMeta');
+        var fill = tpEl('tpFill');
+        var counts = tpEl('tpCounts');
+        var events = tpEl('tpEvents');
+
+        if (data.running) {
+            panel.className = 'test-progress';
+            phase.textContent = '⏳ ' + (data.phase || '准备中');
+            var total = data.total || 0;
+            var done = data.done || 0;
+            if (total > 0) {
+                var pct = Math.min(100, Math.round(done * 100 / total));
+                fill.classList.remove('indeterminate');
+                fill.style.width = pct + '%';
+                counts.textContent = '已完成 ' + done + ' / ' + total + ' 个节点（' + pct + '%）'
+                    + ' · 已用时 ' + formatDuration(data.elapsedMs);
+            } else {
+                fill.classList.add('indeterminate');
+                counts.textContent = '正在准备… 已用时 ' + formatDuration(data.elapsedMs);
+            }
+            meta.textContent = '测试进行中，可离开本页，测试会继续在后台执行';
+        } else {
+            var failed = data.message && data.message.indexOf('失败') >= 0;
+            panel.className = 'test-progress ' + (failed ? 'failed' : 'done');
+            phase.textContent = failed ? '❌ 测试未完成' : '✅ 测试完成';
+            fill.classList.remove('indeterminate');
+            fill.style.width = '100%';
+            counts.textContent = (data.message || '测试已结束')
+                + (data.elapsedMs ? '（耗时 ' + formatDuration(data.elapsedMs) + '）' : '');
+            meta.textContent = '结果已写入数据库，刷新页面可查看延迟与速度';
+        }
+
+        if (events) {
+            events.innerHTML = '';
+            data.events.forEach(function (e) {
+                var li = document.createElement('li');
+                li.textContent = e;
+                if (e.indexOf('⚡') === 0) li.className = 'speed';
+                else if (e.indexOf('✓') === 0) li.className = 'ok';
+                else if (e.indexOf('✗') === 0) li.className = 'bad';
+                events.appendChild(li);
+            });
+        }
+    }
+
+    function setTestButtonRunning(isRunning) {
+        var btn = tpEl('testBtn');
+        if (!btn) return;
+        btn.disabled = isRunning;
+        btn.textContent = isRunning ? '⏳ 测试中…' : '🚀 测试真实可用性';
+    }
+
+    function pollTestStatus() {
+        fetch('/api/test/status', { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                renderProgress(data);
+                setTestButtonRunning(data.running);
+                if (data.running) {
+                    testTimer = setTimeout(pollTestStatus, 1000);
+                } else if (data.done > 0) {
+                    // 跑完自动刷新一次，让表格显示新写入的延迟/速度
+                    setTimeout(function () { location.reload(); }, 1500);
+                }
+            })
+            .catch(function () {
+                // 网络抖动就稍后重试，不打断用户
+                testTimer = setTimeout(pollTestStatus, 3000);
+            });
+    }
+
+    function startNodeTest() {
+        var btn = tpEl('testBtn');
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ 正在启动…'; }
+        // 先乐观展示面板，让用户点下去立刻有反馈
+        renderProgress({ running: true, phase: '准备中', done: 0, total: 0, elapsedMs: 0, events: [] });
+        fetch('/api/test/start', { method: 'POST', headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                renderProgress(data);
+                setTestButtonRunning(true);
+                if (testTimer) clearTimeout(testTimer);
+                testTimer = setTimeout(pollTestStatus, 800);
+            })
+            .catch(function (e) {
+                setTestButtonRunning(false);
+                showToast('启动测试失败: ' + e);
+            });
+    }
+
     // ========== Toast 消息 ==========
     var toastTimer = null;
     function showToast(msg) {
@@ -746,20 +919,16 @@
         }, 3000);
     }
 
-    // ========== 测试进度轮询 ==========
-    // 测试在服务端同步执行（每个节点都要起一次内核，整批可能持续数分钟），
-    // 因此在测试期间按秒重新拉取页面，让进度条推进。
-    (function pollTestProgress() {
-        var banner = document.getElementById('testProgress');
-        if (!banner) return;
-        setTimeout(function() { location.reload(); }, 3000);
-    })();
-
     // ========== 恢复跨页选中 ==========
-    // 页面加载完成后刷新 UI
     document.addEventListener('DOMContentLoaded', function() {
         syncSelectAll();
         refreshUI();
+        // 页面打开时若已有测试在跑（含其它标签页/定时任务触发的），立即接管显示进度
+        var panel = tpEl('testProgress');
+        if (panel && panel.getAttribute('data-running') === 'true') {
+            renderProgress({ running: true, phase: '恢复进度…', done: 0, total: 0, elapsedMs: 0, events: [] });
+            pollTestStatus();
+        }
     });
 </script>
 </body>

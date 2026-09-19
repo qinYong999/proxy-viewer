@@ -19,6 +19,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
@@ -31,6 +32,7 @@ import org.springframework.web.servlet.mvc.support.RedirectAttributes;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -202,23 +204,56 @@ public class ProxyController {
         return "logs";
     }
 
-    /** 手动触发节点真实可用性测试（POST，避免被预取/爬虫触发） */
+    /**
+     * 手动触发节点真实可用性测试。
+     *
+     * <p>整批测试耗时可达数分钟（每节点都要真实启动一次内核），因此这里<b>立即返回</b>：
+     * 测试转入后台执行，前端轮询 {@code /api/test/status} 显示实时进度。
+     * 早期实现让请求同步等待整批跑完，页面在整段时间内毫无反馈，像是卡死了。</p>
+     */
     @PostMapping("/test")
     public String runTest(RedirectAttributes attr) {
         log.info("手动触发节点真实可用性测试");
         try {
-            NodeTestRecord record = nodeTestService.runTest("MANUAL");
-            attr.addFlashAttribute("msg", String.format(
-                    "真实测试完成: 总计 %d, ✅真实可达 %d, ❌失败 %d, 自动删除 %d, 耗时 %dms",
-                    record.getTotalNodes(), record.getSuccessCount(),
-                    record.getFailedCount(), record.getDeletedCount(), record.getDurationMs()));
+            nodeTestService.startTestRun("MANUAL");
+            attr.addFlashAttribute("msg", "测试已开始，进度会实时刷新");
         } catch (IllegalStateException e) {
             attr.addFlashAttribute("error", e.getMessage());
-        } catch (Exception e) {
-            log.error("手动测试失败", e);
-            attr.addFlashAttribute("error", "测试失败: " + e.getMessage());
         }
-        return "redirect:/test-logs";
+        return "redirect:/";
+    }
+
+    /** 页内按钮调用：开始测试并立即返回当前进度（不阻塞等待整批完成） */
+    @PostMapping("/api/test/start")
+    public ResponseEntity<Map<String, Object>> startTest() {
+        log.info("页内按钮触发节点真实可用性测试");
+        try {
+            nodeTestService.startTestRun("MANUAL");
+            return ResponseEntity.ok(statusPayload());
+        } catch (IllegalStateException e) {
+            Map<String, Object> body = statusPayload();
+            body.put("error", e.getMessage());
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+        }
+    }
+
+    /** 前端轮询的测试进度：阶段、已完成/总数、耗时与最近处理的节点 */
+    @GetMapping("/api/test/status")
+    public ResponseEntity<Map<String, Object>> testStatus() {
+        return ResponseEntity.ok(statusPayload());
+    }
+
+    private Map<String, Object> statusPayload() {
+        NodeTestService.ProgressSnapshot snapshot = nodeTestService.snapshot();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("running", snapshot.running());
+        body.put("phase", snapshot.phase());
+        body.put("done", snapshot.done());
+        body.put("total", snapshot.total());
+        body.put("elapsedMs", snapshot.elapsedMs());
+        body.put("message", snapshot.message());
+        body.put("events", snapshot.events());
+        return body;
     }
 
     /** 测试历史页面 */

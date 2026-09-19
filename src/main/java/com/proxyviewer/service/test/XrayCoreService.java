@@ -606,15 +606,53 @@ public class XrayCoreService {
         }
     }
 
-    /** 读取内核输出用于诊断（内核异常退出后调用，stdout 已 EOF） */
+    /**
+     * 读取内核输出用于诊断（内核异常退出后调用，stdout 已 EOF）。
+     *
+     * <p>内核启动时会先打印版本横幅，真正的原因在 {@code [Error]} / {@code Failed to} 行里。
+     * 直接整段截取会把横幅塞进页面，既冗长又掩盖原因，因此优先提取错误行。</p>
+     */
     private static String readProcessOutput(Process process) {
         try (InputStream in = process.getInputStream()) {
-            byte[] buf = in.readNBytes(600);
-            String text = new String(buf, StandardCharsets.UTF_8).trim();
-            return text.isEmpty() ? "(无输出)" : text.replaceAll("\\s+", " ");
+            byte[] buf = in.readNBytes(8192);
+            String extracted = extractCoreError(new String(buf, StandardCharsets.UTF_8));
+            return extracted.isEmpty() ? "(内核无输出)" : extracted;
         } catch (Exception e) {
             return "(读取内核输出失败)";
         }
+    }
+
+    /** 从内核输出中提取最有信息量的一行错误；提取不到则回退到首行非空内容 */
+    static String extractCoreError(String output) {
+        if (output == null || output.isBlank()) {
+            return "";
+        }
+        String fallback = "";
+        for (String raw : output.split("\\R")) {
+            String line = raw.trim();
+            if (line.isEmpty() || line.contains("[Warning]")) {
+                continue;   // 弃用告警不是失败原因
+            }
+            if (line.contains("[Error]") || line.contains("Failed to")
+                    || line.contains("failed to") || line.contains("invalid")
+                    || line.contains("cannot ") || line.contains("panic")) {
+                return condense(line);
+            }
+            if (fallback.isEmpty() && !line.startsWith("Xray ")
+                    && !line.startsWith("A unified platform")) {
+                fallback = line;
+            }
+        }
+        return condense(fallback);
+    }
+
+    /** 去掉日志时间戳与内部标记，只留可读的人话部分 */
+    private static String condense(String line) {
+        return line
+                .replaceAll("^\\d{4}/\\d{2}/\\d{2} \\d{2}:\\d{2}:\\d{2}(\\.\\d+)?\\s*", "")
+                .replaceAll("\\[(Info|Debug|Warning|Error)\\]\\s*", "")
+                .replaceAll("\\[[0-9a-fA-F]{6,}\\]\\s*", "")
+                .trim();
     }
 
     public static String shortMessage(Throwable e) {

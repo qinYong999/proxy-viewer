@@ -93,14 +93,10 @@
         <code>…\v2rayN-windows-64\bin</code>）。
     </div>
 
-    <!-- 测试进行中的实时进度 -->
-    <div class="msg-banner" th:if="${testRunning}">
-        ⏳ 正在测试：<b th:text="${testPhase}">阶段</b>
-        <span th:if="${testTotal > 0}"
-              th:text="'（' + ${testDone} + ' / ' + ${testTotal} + '）'">(0/0)</span>
-        <span style="font-size:12px; color:#636e72;">
-            &nbsp;每节点需启动一次内核，整批耗时较长，此页会自动刷新
-        </span>
+    <!-- 测试进行中的实时进度：与主页共用 /api/test/status，不再整页刷新 -->
+    <div class="msg-banner" id="testProgress" th:attr="data-running=${testRunning}" style="display:none;">
+        <span id="tpPhase">准备中…</span>
+        <span id="tpCounts" style="font-size:12px; color:#636e72;"></span>
     </div>
 
     <div class="nav-bar">
@@ -109,10 +105,11 @@
         <span class="spacer"></span>
         <span th:if="${coreAvailable}" style="font-size:12px; color:#00b894; margin-right:10px;"
               th:title="${corePath}">✅ 内核已就绪</span>
-        <form method="post" action="/test" style="display:inline; margin:0;">
-            <button type="submit" class="btn-test" th:disabled="${testRunning or !coreAvailable}"
-                    th:text="${testRunning} ? '⏳ 测试进行中…' : '🚀 手动测试'">🚀 手动测试</button>
-        </form>
+        <button type="button" id="testBtn" class="btn-test"
+                onclick="startNodeTest()"
+                th:disabled="${!coreAvailable}"
+                th:attr="data-running=${testRunning}"
+                th:text="${testRunning} ? '⏳ 测试进行中…' : '🚀 手动测试'">🚀 手动测试</button>
     </div>
 
     <div class="table-wrapper">
@@ -174,9 +171,83 @@
     </div>
 </div>
 
-<script th:if="${testRunning}">
-    // 测试期间自动刷新，让进度推进（整批测试可能持续数分钟）
-    setTimeout(function () { location.reload(); }, 3000);
+<script>
+    // 测试在后台执行，这里轮询进度；不再整页刷新，用户能看到阶段与计数推进
+    var testTimer = null;
+
+    function tpEl(id) { return document.getElementById(id); }
+
+    function formatDuration(ms) {
+        var total = Math.max(0, Math.round(ms / 1000));
+        var m = Math.floor(total / 60);
+        var s = total % 60;
+        return m > 0 ? (m + ' 分 ' + s + ' 秒') : (s + ' 秒');
+    }
+
+    function renderProgress(data) {
+        var panel = tpEl('testProgress');
+        if (!panel) return;
+        panel.style.display = 'block';
+        var phase = tpEl('tpPhase');
+        var counts = tpEl('tpCounts');
+        if (data.running) {
+            phase.textContent = '⏳ ' + (data.phase || '准备中');
+            var total = data.total || 0;
+            var done = data.done || 0;
+            counts.textContent = total > 0
+                ? '（' + done + ' / ' + total + ' 个节点）· 已用时 ' + formatDuration(data.elapsedMs)
+                : '· 已用时 ' + formatDuration(data.elapsedMs);
+        } else {
+            phase.textContent = (data.message && data.message.indexOf('失败') >= 0) ? '❌ 测试未完成' : '✅ 测试完成';
+            counts.textContent = data.message || '';
+        }
+    }
+
+    function setTestButtonRunning(isRunning) {
+        var btn = tpEl('testBtn');
+        if (!btn) return;
+        btn.disabled = isRunning;
+        btn.textContent = isRunning ? '⏳ 测试进行中…' : '🚀 手动测试';
+    }
+
+    function pollTestStatus() {
+        fetch('/api/test/status', { headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                renderProgress(data);
+                setTestButtonRunning(data.running);
+                if (data.running) {
+                    testTimer = setTimeout(pollTestStatus, 1000);
+                } else if (data.done > 0) {
+                    // 完成后刷新一次，显示新写入的批次记录
+                    setTimeout(function () { location.reload(); }, 1500);
+                }
+            })
+            .catch(function () { testTimer = setTimeout(pollTestStatus, 3000); });
+    }
+
+    function startNodeTest() {
+        var btn = tpEl('testBtn');
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ 正在启动…'; }
+        renderProgress({ running: true, phase: '准备中', done: 0, total: 0, elapsedMs: 0 });
+        fetch('/api/test/start', { method: 'POST', headers: { 'Accept': 'application/json' } })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                renderProgress(data);
+                setTestButtonRunning(true);
+                if (testTimer) clearTimeout(testTimer);
+                testTimer = setTimeout(pollTestStatus, 800);
+            })
+            .catch(function () { setTestButtonRunning(false); });
+    }
+
+    // 进页面时若已有测试在跑（含定时任务触发的），直接接管显示
+    document.addEventListener('DOMContentLoaded', function () {
+        var panel = tpEl('testProgress');
+        if (panel && panel.getAttribute('data-running') === 'true') {
+            pollTestStatus();
+        }
+    });
 </script>
 </body>
 </html>
