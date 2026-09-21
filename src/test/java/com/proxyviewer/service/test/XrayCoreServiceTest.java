@@ -1,7 +1,7 @@
 package com.proxyviewer.service.test;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import com.proxyviewer.config.AppProperties;
 import com.proxyviewer.model.ProxyNode;
 import org.junit.jupiter.api.Test;

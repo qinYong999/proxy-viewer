@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.4.1</version>
+        <version>4.1.1</version>
         <relativePath/>
     </parent>
 
@@ -19,21 +19,13 @@
 
     <properties>
         <java.version>21</java.version>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
-        <!--
-          Spring Boot 3.4.1 管理的 byte-buddy（1.15.x）不支持 JDK 24+，
-          在 JDK 25 上运行测试会报 "Mockito is unable to load ... MockMaker"。
-          这里显式提升到支持新 JDK 的版本，使测试不再依赖"必须用某个特定 JDK"。
-        -->
-        <byte-buddy.version>1.17.8</byte-buddy.version>
     </properties>
 
     <dependencies>
-        <!-- Spring Web -->
+        <!-- Spring MVC Web（Spring Boot 4 起 spring-boot-starter-web 已废弃，改用 starter-webmvc） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
 
         <!-- Thymeleaf 模板引擎 -->
@@ -42,9 +34,13 @@
             <artifactId>spring-boot-starter-thymeleaf</artifactId>
         </dependency>
 
-        <!-- Jackson JSON 处理 -->
+        <!--
+          Jackson：Spring Boot 4 起默认使用 Jackson 3，坐标由
+          com.fasterxml.jackson.core 迁移到 tools.jackson.core，
+          代码里的包名相应改为 tools.jackson.databind.*。
+        -->
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
+            <groupId>tools.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
@@ -61,35 +57,27 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- 单元测试（JUnit 5 + AssertJ） -->
+        <!-- 单元测试（JUnit 6 + AssertJ + Mockito + MockMvc） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
-
         <!--
-          显式提升 Mockito：Spring Boot 3.4.1 管理的 5.14.2 在 JDK 24+ 上
-          无法初始化 inline mock maker。这里跟随支持新 JDK 的版本。
+          Spring Boot 4 起 Web MVC 的测试自动配置（@AutoConfigureMockMvc 等）
+          从 spring-boot-test-autoconfigure 拆到了独立模块 spring-boot-webmvc-test，
+          不再随 spring-boot-starter-test 传递进来，需要显式引入。
         -->
         <dependency>
-            <groupId>org.mockito</groupId>
-            <artifactId>mockito-core</artifactId>
-            <version>5.20.0</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.mockito</groupId>
-            <artifactId>mockito-junit-jupiter</artifactId>
-            <version>5.20.0</version>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webmvc-test</artifactId>
             <scope>test</scope>
         </dependency>
 
-        <!-- 测试用内存数据库（仅在测试期替代 MySQL） -->
+        <!-- 测试用内存数据库（仅在测试期替代 MySQL），版本由 Spring Boot 统一管理 -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <version>2.3.232</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -104,11 +92,11 @@
                 </configuration>
             </plugin>
             <!--
-              Mockito 的 inline mock maker 需要在运行时挂载 Java agent，而 JDK 21+ 默认禁止
-              （JEP 451），在 JDK 24/25 上会直接失败，导致所有 Spring 集成测试报
-              "Could not initialize inline Byte Buddy mock maker"。
-              项目改用 subclass mock maker（见 src/test/resources/mockito-extensions/），
-              不再依赖 agent 挂载，因此无需在此传入特殊 JVM 参数。
+              Mockito 的 mock maker：项目使用 subclass mock maker
+              （见 src/test/resources/mockito-extensions/），不依赖运行时挂载 Java agent。
+              JDK 21+ 默认禁止动态挂载 agent（JEP 451），subclass 方式可以规避该限制。
+              Spring Boot 4.1.1 管理的 Mockito 5.23.0 / Byte Buddy 1.18.11 已原生支持 JDK 25，
+              因此不再需要手工提升这两个依赖的版本。
             -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
