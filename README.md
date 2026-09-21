@@ -22,14 +22,25 @@
 | 层级 | 技术 |
 |------|------|
 | 语言 | Java 21+ |
-| 框架 | Spring Boot 3.4.1 |
+| 框架 | Spring Boot 4.1.1 |
 | ORM | Spring Data JPA + Hibernate |
 | 数据库 | MySQL 8.0（测试用 H2 内存库） |
 | 模板引擎 | Thymeleaf |
 | 前端 | 原生 HTML/CSS/JS（无构建步骤） |
 | 构建 | Maven 3.9+ |
 | HTTP 客户端 | `java.net.http.HttpClient`（HTTP 代理与直连）+ 自研 `Socks5HttpClient`（SOCKS5，含 TLS）+ 裸 `SSLSocket`（DoH 降级通道） |
-| 测试 | JUnit 5 + AssertJ + MockMvc |
+| 测试 | JUnit 6 + AssertJ + MockMvc |
+
+> **Spring Boot 4.1.1 迁移要点**（2026-09 从 3.4.1 升级）：
+> - Web starter 更名为 `spring-boot-starter-webmvc`（旧的 `spring-boot-starter-web` 已废弃，仍可用）；
+> - 默认 JSON 库改为 Jackson 3：坐标 `com.fasterxml.jackson.core:jackson-databind` →
+>   `tools.jackson.core:jackson-databind`，代码包名 `com.fasterxml.jackson.databind.*` → `tools.jackson.databind.*`；
+> - `WebServerApplicationContext` 迁到 `org.springframework.boot.web.server.context`；
+> - Web MVC 的测试自动配置被拆到独立模块 `spring-boot-webmvc-test`（不再随 `spring-boot-starter-test` 传递），
+>   `@AutoConfigureMockMvc` 包名变为 `org.springframework.boot.webmvc.test.autoconfigure`；
+> - 会话跟踪模式固定为 Cookie（`server.servlet.session.tracking-modes=cookie`）：容器一旦把
+>   `;jsessionid=…` 拼进重定向 URL，该路径不会命中 `@GetMapping("/")`，会被欢迎页映射用空模型渲染 `index` 而报错；
+> - 运行期基线：Java 21+、Tomcat 11、Hibernate 7、MySQL 驱动 9.x。
 
 ## 项目结构
 
@@ -384,6 +395,14 @@ mvn test
 - `NodeSyncIntegrationTest` — 真实数据库下的增量刷新（id 与测速结果保持）与"失败只标记 + 手动清理"
 
 集成测试使用 H2 内存库，不需要 MySQL。
+
+测试环境备注（JDK 25 + Spring Boot 4.1.1）：
+
+- Mockito 通过 `src/test/resources/mockito-extensions/org.mockito.plugins.MockMaker` 固定为 subclass mock maker，
+  不依赖 JDK 21+ 已禁止的 agent 动态挂载（JEP 451）；代价是不能 mock final 类 / 静态方法 / 构造器；
+- Mockito 5.23.0 与 Byte Buddy 1.18.11 由 Spring Boot 4.1.1 统一管理，已原生支持 JDK 25，
+  因此 pom 里不再手工提升这两个依赖的版本；
+- MockMvc 相关测试需要显式引入 `spring-boot-webmvc-test` 模块，否则 `@AutoConfigureMockMvc` 无法解析。
 
 ## 常见问题
 
