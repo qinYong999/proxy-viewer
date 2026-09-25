@@ -199,8 +199,8 @@ public class ProxyController {
 
         model.addAttribute("logs", logPage.getContent());
         model.addAttribute("totalCount", logPage.getTotalElements());
-        model.addAttribute("currentPage", page);
-        model.addAttribute("totalPages", logPage.getTotalPages());
+        model.addAttribute("currentPage", Math.max(page, 1));
+        model.addAttribute("totalPages", Math.max(logPage.getTotalPages(), 1));
         return "logs";
     }
 
@@ -265,8 +265,8 @@ public class ProxyController {
 
         model.addAttribute("tests", testPage.getContent());
         model.addAttribute("totalCount", testPage.getTotalElements());
-        model.addAttribute("currentPage", page);
-        model.addAttribute("totalPages", testPage.getTotalPages());
+        model.addAttribute("currentPage", Math.max(page, 1));
+        model.addAttribute("totalPages", Math.max(testPage.getTotalPages(), 1));
         addTestStatus(model);
         return "test-logs";
     }
@@ -337,8 +337,8 @@ public class ProxyController {
         String defaultUrl = props.getSubscription().getDefaultUrl();
         model.addAttribute("nodes", pageResult.getContent());
         model.addAttribute("totalCount", pageResult.getTotalElements());
-        model.addAttribute("currentPage", page);
-        model.addAttribute("totalPages", pageResult.getTotalPages());
+        model.addAttribute("currentPage", Math.max(page, 1));
+        model.addAttribute("totalPages", Math.max(pageResult.getTotalPages(), 1));
         model.addAttribute("pageSize", size);
         model.addAttribute("pageSizes", PAGE_SIZES);
         model.addAttribute("currentUrl", (url != null && !url.isBlank()) ? url : defaultUrl);
