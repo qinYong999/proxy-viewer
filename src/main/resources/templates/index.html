@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- CSRF Token（Spring Security）：fetch 发起状态变更请求时放进 X-CSRF-TOKEN 请求头 -->
+    <meta name="_csrf" th:content="${_csrf != null ? _csrf.token : ''}">
+    <meta name="_csrf_header" th:content="${_csrf != null ? _csrf.headerName : ''}">
     <title>代理订阅节点信息</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -24,7 +27,19 @@
         .header {
             background: linear-gradient(135deg, #6c5ce7, #a29bfe);
             color: #fff; padding: 18px 24px; border-radius: 12px; margin-bottom: 14px;
+            position: relative;
         }
+        .header .logout {
+            position: absolute; top: 18px; right: 24px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .header .logout .who { font-size: 12px; opacity: 0.9; }
+        .header .logout button {
+            background: rgba(255,255,255,0.18); color: #fff;
+            border: 1px solid rgba(255,255,255,0.35); border-radius: 8px;
+            padding: 5px 12px; font-size: 12px; cursor: pointer;
+        }
+        .header .logout button:hover { background: rgba(255,255,255,0.28); }
         .header h1 { font-size: 22px; margin-bottom: 6px; }
         .header .subtitle { font-size: 13px; opacity: 0.9; word-break: break-all; }
         .header .stats { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
@@ -262,6 +277,10 @@
 
     <!-- Header -->
     <div class="header">
+        <form class="logout" th:if="${authEnabled}" th:action="@{/logout}" method="post">
+            <span class="who" th:if="${authUsername != ''}" th:text="${'👤 ' + authUsername}">👤 admin</span>
+            <button type="submit">退出登录</button>
+        </form>
         <h1>🌐 代理订阅节点信息</h1>
         <div class="subtitle">订阅链接：<span th:text="${currentUrl}">...</span></div>
         <div class="stats">
@@ -359,7 +378,7 @@
         <input type="hidden" id="sortOrder" th:value="${currentOrder}">
 
         <!-- 刷新订阅是状态变更操作，改为 POST 表单提交 -->
-        <form id="refreshForm" method="post" action="/refresh" style="display:none;">
+        <form id="refreshForm" method="post" th:action="@{/refresh}" style="display:none;">
             <input type="hidden" name="url" id="refreshFormUrl">
             <input type="hidden" name="size" id="refreshFormSize">
         </form>
@@ -491,7 +510,7 @@
     </div>
 
     <!-- 分页 -->
-    <div class="pagination" th:if="${totalPages > 1}">
+    <div class="pagination">
         <a th:href="@{/(page=1,size=${pageSize},url=${currentUrl},country=${currentCountry},sort=${currentSort},order=${currentOrder})}"
            th:classappend="${currentPage == 1} ? 'disabled' : ''">«</a>
         <a th:href="@{/(page=${currentPage - 1},size=${pageSize},url=${currentUrl},country=${currentCountry},sort=${currentSort},order=${currentOrder})}"
@@ -533,6 +552,17 @@
 <div class="toast" id="toast"></div>
 
 <script>
+    // ========== CSRF Token（Spring Security） ==========
+    // 表单提交由 Thymeleaf 自动注入隐藏域；fetch 发起的 POST 需要手动带
+    // X-CSRF-TOKEN 请求头（值取自 <head> 里的 _csrf meta 标签）。
+    function csrfHeaders() {
+        var token = document.querySelector('meta[name="_csrf"]');
+        var header = document.querySelector('meta[name="_csrf_header"]');
+        var headers = {};
+        if (token && header && header.content) { headers[header.content] = token.content; }
+        return headers;
+    }
+
     // ========== 刷新 ==========
     function refreshUrl() {
         var url = document.getElementById('subUrl').value.trim();
@@ -716,7 +746,7 @@
         try {
             var resp = await fetch('/api/copy', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: Object.assign({ 'Content-Type': 'application/json' }, csrfHeaders()),
                 body: JSON.stringify({ ids: ids })
             });
             var text = await resp.text();
@@ -764,7 +794,7 @@
         try {
             var resp = await fetch('/api/delete', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: Object.assign({ 'Content-Type': 'application/json' }, csrfHeaders()),
                 body: JSON.stringify({ ids: ids })
             });
             var result = await resp.json();
@@ -784,7 +814,7 @@
         if (!confirm('确认删除所有被标记为失败的节点？此操作不可恢复。')) return;
         showToast('正在清理...');
         try {
-            var resp = await fetch('/api/purge-failed', { method: 'POST' });
+            var resp = await fetch('/api/purge-failed', { method: 'POST', headers: csrfHeaders() });
             var result = await resp.json();
             if (result.success) {
                 showToast('✅ 已清理 ' + result.deleted + ' 个失败节点');
@@ -893,7 +923,7 @@
         if (btn) { btn.disabled = true; btn.textContent = '⏳ 正在启动…'; }
         // 先乐观展示面板，让用户点下去立刻有反馈
         renderProgress({ running: true, phase: '准备中', done: 0, total: 0, elapsedMs: 0, events: [] });
-        fetch('/api/test/start', { method: 'POST', headers: { 'Accept': 'application/json' } })
+        fetch('/api/test/start', { method: 'POST', headers: Object.assign({ 'Accept': 'application/json' }, csrfHeaders()) })
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 renderProgress(data);

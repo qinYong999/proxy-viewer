@@ -24,12 +24,12 @@ public class AppProperties {
     public Subscription getSubscription() { return subscription; }
     public Test getTest() { return test; }
 
-    /** 访问控制：HTTP Basic 认证 */
+    /** 访问控制：Spring Security 表单登录（见 {@link SecurityConfig}） */
     public static class Security {
         /** 是否启用认证。默认开启，关闭后任何人可访问（仅建议本机调试时关闭） */
         private boolean enabled = true;
         private String username = "admin";
-        /** 留空则启动时随机生成并打印到日志 */
+        /** 留空则启动时随机生成并打印到日志；配置里存明文口令，运行期用 bcrypt 编码比对 */
         private String password = "";
 
         public boolean isEnabled() { return enabled; }

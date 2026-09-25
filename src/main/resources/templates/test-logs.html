@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- CSRF Token（Spring Security）：fetch 发起状态变更请求时放进 X-CSRF-TOKEN 请求头 -->
+    <meta name="_csrf" th:content="${_csrf != null ? _csrf.token : ''}">
+    <meta name="_csrf_header" th:content="${_csrf != null ? _csrf.headerName : ''}">
     <title>节点测试记录</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -17,7 +20,19 @@
         .header {
             background: linear-gradient(135deg, #6c5ce7, #a29bfe);
             color: #fff; padding: 18px 24px; border-radius: 12px; margin-bottom: 14px;
+            position: relative;
         }
+        .header .logout {
+            position: absolute; top: 18px; right: 24px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .header .logout .who { font-size: 12px; opacity: 0.9; }
+        .header .logout button {
+            background: rgba(255,255,255,0.18); color: #fff;
+            border: 1px solid rgba(255,255,255,0.35); border-radius: 8px;
+            padding: 5px 12px; font-size: 12px; cursor: pointer;
+        }
+        .header .logout button:hover { background: rgba(255,255,255,0.28); }
         .header h1 { font-size: 22px; margin-bottom: 6px; }
         .header .subtitle { font-size: 13px; opacity: 0.9; }
         .header .stats { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
@@ -72,6 +87,10 @@
 <body>
 <div class="container">
     <div class="header">
+        <form class="logout" th:if="${authEnabled}" th:action="@{/logout}" method="post">
+            <span class="who" th:if="${authUsername != ''}" th:text="${'👤 ' + authUsername}">👤 admin</span>
+            <button type="submit">退出登录</button>
+        </form>
         <h1>🔍 节点真实可用性测试</h1>
         <div class="subtitle">
             为每个节点启动真实代理内核（Xray），经它的本地 SOCKS 入站访问
@@ -158,7 +177,7 @@
         </div>
     </div>
 
-    <div class="pagination" th:if="${totalPages > 1}">
+    <div class="pagination">
         <a th:href="@{/test-logs(page=1)}" th:classappend="${currentPage == 1} ? 'disabled' : ''">«</a>
         <a th:href="@{/test-logs(page=${currentPage - 1})}" th:classappend="${currentPage == 1} ? 'disabled' : ''">‹</a>
         <th:block th:each="i : ${#numbers.sequence(1, totalPages)}">
@@ -172,6 +191,15 @@
 </div>
 
 <script>
+    // CSRF Token（Spring Security）：fetch 的 POST 需手动带 X-CSRF-TOKEN 请求头
+    function csrfHeaders() {
+        var token = document.querySelector('meta[name="_csrf"]');
+        var header = document.querySelector('meta[name="_csrf_header"]');
+        var headers = {};
+        if (token && header && header.content) { headers[header.content] = token.content; }
+        return headers;
+    }
+
     // 测试在后台执行，这里轮询进度；不再整页刷新，用户能看到阶段与计数推进
     var testTimer = null;
 
@@ -230,7 +258,7 @@
         var btn = tpEl('testBtn');
         if (btn) { btn.disabled = true; btn.textContent = '⏳ 正在启动…'; }
         renderProgress({ running: true, phase: '准备中', done: 0, total: 0, elapsedMs: 0 });
-        fetch('/api/test/start', { method: 'POST', headers: { 'Accept': 'application/json' } })
+        fetch('/api/test/start', { method: 'POST', headers: Object.assign({ 'Accept': 'application/json' }, csrfHeaders()) })
             .then(function (r) { return r.json(); })
             .then(function (data) {
                 renderProgress(data);

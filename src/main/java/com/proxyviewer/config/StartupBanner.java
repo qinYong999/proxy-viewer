@@ -89,7 +89,7 @@ public class StartupBanner implements ApplicationListener<ApplicationReadyEvent>
             }
         }
         if (authEnabled) {
-            log.info("  访问认证: 已开启（用户名 {}）", authUsername);
+            log.info("  访问认证: 已开启（表单登录 /login，用户名 {}）", authUsername);
             if (authPassword == null || authPassword.isBlank()) {
                 log.info("  访问口令: 未配置，请使用上方启动日志中随机生成的口令（或用 APP_PASSWORD 注入）");
             }

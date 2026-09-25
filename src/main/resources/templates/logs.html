@@ -21,7 +21,19 @@
         .header {
             background: linear-gradient(135deg, #6c5ce7, #a29bfe);
             color: #fff; padding: 18px 24px; border-radius: 12px; margin-bottom: 14px;
+            position: relative;
         }
+        .header .logout {
+            position: absolute; top: 18px; right: 24px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .header .logout .who { font-size: 12px; opacity: 0.9; }
+        .header .logout button {
+            background: rgba(255,255,255,0.18); color: #fff;
+            border: 1px solid rgba(255,255,255,0.35); border-radius: 8px;
+            padding: 5px 12px; font-size: 12px; cursor: pointer;
+        }
+        .header .logout button:hover { background: rgba(255,255,255,0.28); }
         .header h1 { font-size: 22px; margin-bottom: 6px; }
         .header .subtitle { font-size: 13px; opacity: 0.9; }
         .header .stats { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
@@ -104,6 +116,10 @@
 <body>
 <div class="container">
     <div class="header">
+        <form class="logout" th:if="${authEnabled}" th:action="@{/logout}" method="post">
+            <span class="who" th:if="${authUsername != ''}" th:text="${'👤 ' + authUsername}">👤 admin</span>
+            <button type="submit">退出登录</button>
+        </form>
         <h1>📋 操作日志</h1>
         <div class="subtitle">记录刷新订阅、复制节点等关键操作</div>
         <div class="stats">
@@ -168,7 +184,7 @@
     </div>
 
     <!-- 分页 -->
-    <div class="pagination" th:if="${totalPages > 1}">
+    <div class="pagination">
         <a th:href="@{/logs(page=1)}" th:classappend="${currentPage == 1} ? 'disabled' : ''">«</a>
         <a th:href="@{/logs(page=${currentPage - 1})}" th:classappend="${currentPage == 1} ? 'disabled' : ''">‹</a>
 

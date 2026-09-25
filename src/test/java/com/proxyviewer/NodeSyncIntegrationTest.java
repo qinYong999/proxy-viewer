@@ -11,13 +11,13 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.Base64;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
@@ -29,9 +29,6 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @IntegrationTest
 class NodeSyncIntegrationTest {
-
-    private static final String AUTH = "Basic " + Base64.getEncoder()
-            .encodeToString("tester:secret".getBytes(StandardCharsets.UTF_8));
 
     @Autowired
     private NodeSyncService nodeSyncService;
@@ -120,7 +117,7 @@ class NodeSyncIntegrationTest {
 
         // 失败节点仍留在库里，并且页面能渲染出失败标记与清理按钮
         assertThat(repository.count()).isEqualTo(2);
-        mockMvc.perform(get("/").header(HttpHeaders.AUTHORIZATION, AUTH))
+        mockMvc.perform(get("/").with(user("tester")))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("bad.com")))
                 .andExpect(content().string(containsString("TIMEOUT")))
@@ -129,7 +126,8 @@ class NodeSyncIntegrationTest {
 
         // 手动清理：只删失败节点，可达节点保留
         mockMvc.perform(post("/api/purge-failed")
-                        .header(HttpHeaders.AUTHORIZATION, AUTH)
+                        .with(user("tester"))
+                        .with(csrf())
                         .header(HttpHeaders.ORIGIN, "http://localhost"))
                 .andExpect(status().isOk())
                 .andExpect(content().string(containsString("\"deleted\":1")));
@@ -143,7 +141,8 @@ class NodeSyncIntegrationTest {
         ProxyNode saved = repository.save(node("copy.com", "COPY"));
 
         mockMvc.perform(post("/api/copy")
-                        .header(HttpHeaders.AUTHORIZATION, AUTH)
+                        .with(user("tester"))
+                        .with(csrf())
                         .header(HttpHeaders.ORIGIN, "http://localhost")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"ids\":[" + saved.getId() + "]}"))
