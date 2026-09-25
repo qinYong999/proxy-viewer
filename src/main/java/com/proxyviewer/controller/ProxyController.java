@@ -43,7 +43,7 @@ public class ProxyController {
     private static final Logger log = LoggerFactory.getLogger(ProxyController.class);
     private static final Logger oplog = LoggerFactory.getLogger("OPLOG");
 
-    private static final List<Integer> PAGE_SIZES = List.of(20, 50, 100, 200);
+    private static final List<Integer> PAGE_SIZES = List.of(20, 50, 100, 200, 500);
 
     private final AppProperties props;
     private final SubscriptionService subscriptionService;
