@@ -35,6 +35,15 @@
         </dependency>
 
         <!--
+          Spring Security：登录认证（表单登录 + 会话）与 CSRF Token 防护。
+          取代原先自研的 BasicAuthFilter（HTTP Basic），配置键仍是 app.security.*。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!--
           Jackson：Spring Boot 4 起默认使用 Jackson 3，坐标由
           com.fasterxml.jackson.core 迁移到 tools.jackson.core，
           代码里的包名相应改为 tools.jackson.databind.*。
@@ -71,6 +80,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Spring Security 测试支持（MockMvc 的 csrf()/user()/formLogin() 等请求后处理器） -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
             <scope>test</scope>
         </dependency>
 
