@@ -15,7 +15,7 @@
 - 🔬 **连通性测试** — 定时（默认 6 小时）+ 手动触发，TLS/WS 节点做真实下载测速并记录延迟
 - 🧹 **失败节点管理** — 测试失败只打标记不删数据，页面可一键清理失败节点
 - 📊 **审计与历史** — 操作日志（刷新/复制/删除/清理）与测试批次记录
-- 🔐 **访问控制** — 默认开启 HTTP Basic 认证，随机口令兜底，默认只监听 127.0.0.1
+- 🔐 **访问控制** — Spring Security 表单登录（`/login`）+ CSRF Token 防护，随机口令兜底，默认只监听 127.0.0.1
 
 ## 技术栈
 
@@ -26,6 +26,7 @@
 | ORM | Spring Data JPA + Hibernate |
 | 数据库 | MySQL 8.0（测试用 H2 内存库） |
 | 模板引擎 | Thymeleaf |
+| 安全 | Spring Security（表单登录 + 会话 + CSRF Token） |
 | 前端 | 原生 HTML/CSS/JS（无构建步骤） |
 | 构建 | Maven 3.9+ |
 | HTTP 客户端 | `java.net.http.HttpClient`（HTTP 代理与直连）+ 自研 `Socks5HttpClient`（SOCKS5，含 TLS）+ 裸 `SSLSocket`（DoH 降级通道） |
@@ -63,11 +64,13 @@ proxy-viewer/
     │   │   ├── Application.java                      Spring Boot 入口（强制 IPv4 栈）
     │   │   ├── config/
     │   │   │   ├── AppProperties.java                app.* 配置绑定
-    │   │   │   ├── BasicAuthFilter.java              HTTP Basic 认证
-    │   │   │   ├── SameOriginFilter.java             CSRF 同源校验
+    │   │   │   ├── SecurityConfig.java               Spring Security：表单登录 + 登出 + CSRF Token
+    │   │   │   ├── SameOriginFilter.java             同源校验（CSRF 纵深防御）
     │   │   │   └── ScheduledTasks.java               定时测试（可开关/可配周期）
     │   │   ├── controller/
-    │   │   │   └── ProxyController.java              页面路由 + JSON API
+    │   │   │   ├── ProxyController.java              页面路由 + JSON API
+    │   │   │   ├── LoginController.java              登录页（认证本身由 Spring Security 完成）
+    │   │   │   └── SecurityModelAdvice.java          给模板提供登录状态/用户名
     │   │   ├── model/
     │   │   │   ├── ProxyNode.java                    节点实体（含测试结果与内核参数）
     │   │   │   ├── ProxyNodeRepository.java
@@ -91,12 +94,14 @@ proxy-viewer/
     │       ├── application.properties                默认配置（敏感项走环境变量）
     │       ├── logback-spring.xml                    控制台 + 全量日志 + 独立 OPLOG
     │       └── templates/
+    │           ├── login.html                        登录页（表单登录）
     │           ├── index.html                        节点列表主页
     │           ├── logs.html                         操作日志
     │           └── test-logs.html                    测试记录
     └── test/java/com/proxyviewer/
         ├── support/IntegrationTest.java              集成测试组合注解（H2 + MockMvc）
-        ├── WebSmokeTest.java                         认证/同源/模板渲染
+        ├── WebSmokeTest.java                         同源校验 + 模板渲染 + 控制器冒烟
+        ├── SecurityFlowTest.java                     表单登录/登出/CSRF Token/401 JSON
         ├── NodeSyncIntegrationTest.java              增量刷新与失败标记（真实数据库）
         ├── RealProxyEndToEndTest.java                自建内核服务端的真实闭环验证
         └── service/ + service/test/                  解析、对账、内核配置、SOCKS5、探测
@@ -172,7 +177,7 @@ java -jar target/proxy-subscription-viewer-1.0.0.jar
 
 ### 5. 访问
 
-打开 <http://localhost:8080>，输入用户名（默认 `admin`）与口令。
+打开 <http://localhost:8080>，会跳转到登录页，输入用户名（默认 `admin`）与口令（登录后可随时点右上角「退出登录」）。
 
 启动完成后日志会把访问地址直接打出来（随机端口也会显示真实端口）：
 
@@ -180,7 +185,7 @@ java -jar target/proxy-subscription-viewer-1.0.0.jar
 ========================================================
   proxy-subscription-viewer 启动完成
   系统访问地址: http://127.0.0.1:8080
-  访问认证: 已开启（用户名 admin）
+  访问认证: 已开启（表单登录 /login，用户名 admin）
   订阅链接: 未配置（请在页面填写，或用 SUBSCRIPTION_URL 注入）
 ========================================================
 ```
@@ -240,18 +245,19 @@ java -jar target/proxy-subscription-viewer-1.0.0.jar
 | GET | `/logs` | 操作日志（刷新/复制/删除/清理） |
 | GET | `/test-logs` | 测试批次历史（总计/真实可达/失败/平均延迟/已测速/UDP 可用/耗时） |
 
-所有状态变更接口都是 **POST**，并且必须通过同源校验（见下）；无认证访问一律 `401`。
+所有状态变更接口都是 **POST**，必须携带 **CSRF Token** 并通过同源校验（见下）；未登录访问页面跳转 `/login`，`/api/**` 返回 `401` JSON。
 
 ## 安全设计
 
 | 议题 | 处理方式 |
 |------|----------|
-| 未授权访问 | 默认开启 HTTP Basic 认证；未配置口令时启动随机生成并打印，杜绝弱默认口令 |
+| 未授权访问 | Spring Security 表单登录（`/login`，会话保存在 `JSESSIONID`），支持页面右上角「退出登录」；未配置口令时启动随机生成并打印，杜绝弱默认口令 |
 | 暴露面 | 默认只监听 `127.0.0.1`；未使用 actuator（已从依赖中移除） |
 | SSRF | 订阅地址只允许 `http/https`、禁止 userinfo；拒绝回环/私有/链路本地/组播/保留地址；**跟随重定向后再次校验最终地址**；DoH 解析结果同样校验。本地 DNS 解析失败时放行（因为真实解析发生在代理/DoH 侧） |
-| CSRF | `SameOriginFilter` 对非安全方法校验 `Sec-Fetch-Site`/`Origin`/`Referer` 与 Host 是否一致；Basic 凭据会被浏览器按目标源自动附带，因此这一步是必需的 |
+| CSRF | ① Spring Security CSRF Token（会话同步令牌）：表单由 Thymeleaf 自动注入 `_csrf` 隐藏域，页面里的 `fetch` 从 `_csrf` meta 标签取值放 `X-CSRF-TOKEN` 请求头；② `SameOriginFilter` 另对非安全方法校验 `Sec-Fetch-Site`/`Origin`/`Referer` 与 Host 是否一致，作为纵深防御 |
+| 会话加固 | `JSESSIONID` 为 `HttpOnly` + `SameSite=Lax`，且只用 Cookie 跟踪（不拼进 URL） |
 | 状态变更语义 | `/refresh`、`/test`、删除、清理全部为 POST，不再能被预取或爬虫误触发 |
-| 凭据落盘 | 配置文件中不含任何口令；日志仅在未配置时打印一次随机口令 |
+| 凭据落盘 | 配置文件中不含任何口令；口令用 bcrypt 编码后比对；日志仅在未配置时打印一次随机口令 |
 
 > ⚠️ 本应用能读取订阅中的全部节点（含 UUID，等同代理凭据）。若确需对外暴露，请自行在前面加 HTTPS 反向代理，并务必设置强口令。
 
@@ -391,7 +397,8 @@ mvn test
 - `CredentialMismatchDiagnosticTest` — 用只接受指定 UUID 的自建服务端验证：**凭据错误必须判为不可用**（若为可达即说明请求没走代理）
 - `RealProxyEndToEndTest` — 本机自建 Xray 服务端作为"节点"的闭环：真实测出延迟、不可达节点被正确标记、失败节点不被物理删除
 - `NodeTestProgressTest` — 测试触发立即返回（不阻塞页面）、进度可观察、结束后状态复位、重复触发被拒
-- `WebSmokeTest` — 401 认证、跨站 403、同源放行、三个模板渲染、`/refresh` 不接受 GET
+- `WebSmokeTest` — 跨站 403、同源放行、三个模板渲染、`/refresh` 不接受 GET
+- `SecurityFlowTest` — 表单登录/登出、口令错误提示、CSRF Token 缺失 403、`/api` 未登录 401 JSON、Basic 头不再生效
 - `NodeSyncIntegrationTest` — 真实数据库下的增量刷新（id 与测速结果保持）与"失败只标记 + 手动清理"
 
 集成测试使用 H2 内存库，不需要 MySQL。
@@ -428,7 +435,14 @@ A: 明文 TCP 节点无法做 HTTP 测速，速度列为 `N/A` 属正常；只�
 A: 正常情况下不会。增量刷新会保留未变化节点的测速结果；只有订阅中已消失的节点才会被删除。
 
 **Q: 为什么删除 / 清理接口提示 403？**
-A: 触发了同源校验。这些接口必须从本页面发起（或由同源的脚本调用），跨站请求会被拒绝。
+A: 两种可能：一是缺少/携带了失效的 CSRF Token（脚本调用需先登录拿会话，再从页面 HTML 的
+`_csrf` meta 标签取值放进 `X-CSRF-TOKEN` 请求头）；二是触发了同源校验（`Sec-Fetch-Site: cross-site`
+或 Origin/Referer 与 Host 不一致）。这些接口必须从本页面发起或由同源脚本调用。
+
+**Q: 脚本怎么调用这些接口？**
+A: 表单登录后用会话 Cookie（`JSESSIONID`）保持登录态；状态变更请求（POST）带上
+`X-CSRF-TOKEN: <页面 _csrf meta 的值>` 即可。若只是本机调试、不想处理会话与 Token，
+可临时设 `APP_AUTH_ENABLED=false`（认证与 CSRF 校验都会关闭，不建议对外使用）。
 
 **Q: 页面提示"未找到代理内核"？**
 A: 本机没有可用的 Xray 内核。若装过 v2rayN，把 `app.test.core-dir` 指向它的 `bin` 目录即可；
